@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { PREDEFINED_COLORS, QRConfig } from './types';
 
@@ -66,20 +66,40 @@ const App: React.FC = () => {
       // 3. Draw QR Code
       ctx.drawImage(img, cardX + cardPadding, cardY + cardPadding, qrSize, qrSize);
 
-      // 4. Draw Center Badge (if text exists)
+      // 4. Draw Center Badge (Dynamic sizing)
       if (config.centerText) {
-        const badgeSize = 160;
-        const bx = cardX + cardPadding + (qrSize / 2) - (badgeSize / 2);
-        const by = cardY + cardPadding + (qrSize / 2) - (badgeSize / 2);
+        ctx.font = 'bold 36px Inter, sans-serif';
+        const textMetrics = ctx.measureText(config.centerText);
+        const padding = 40;
+        
+        // Calculate needed size based on text, but cap it at 30% of QR size for scannability
+        const maxBadgeSize = qrSize * 0.3; 
+        const minBadgeSize = 140;
+        
+        let badgeWidth = Math.max(minBadgeSize, textMetrics.width + padding);
+        let badgeHeight = minBadgeSize;
+
+        // If it's too wide, we make it a rectangle or shrink font
+        let finalBadgeSize = Math.min(maxBadgeSize, badgeWidth);
+        let fontSize = 36;
+        
+        // Shrink font if text still doesn't fit in the max allowed badge size
+        ctx.font = `bold ${fontSize}px Inter, sans-serif`;
+        while (ctx.measureText(config.centerText).width > (finalBadgeSize - 20) && fontSize > 12) {
+          fontSize -= 2;
+          ctx.font = `bold ${fontSize}px Inter, sans-serif`;
+        }
+
+        const bx = cardX + cardPadding + (qrSize / 2) - (finalBadgeSize / 2);
+        const by = cardY + cardPadding + (qrSize / 2) - (finalBadgeSize / 2);
         
         ctx.fillStyle = config.color;
-        ctx.fillRect(bx, by, badgeSize, badgeSize);
+        ctx.fillRect(bx, by, finalBadgeSize, finalBadgeSize);
         
         ctx.fillStyle = '#ffffff';
-        ctx.font = '500 36px Inter, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(config.centerText, bx + (badgeSize / 2), by + (badgeSize / 2));
+        ctx.fillText(config.centerText, bx + (finalBadgeSize / 2), by + (finalBadgeSize / 2));
       }
 
       // 5. Draw Title Footer
@@ -152,7 +172,7 @@ const App: React.FC = () => {
                   onChange={handleInputChange}
                   rows={2}
                   className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all resize-none text-sm md:text-base"
-                  placeholder="Paste URL, Text, or Document link here..."
+                  placeholder="Paste URL, Text, or Document link..."
                 />
               </div>
 
@@ -165,7 +185,7 @@ const App: React.FC = () => {
                     value={config.title}
                     onChange={handleInputChange}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all text-sm"
-                    placeholder="e.g. Kamakhya temple"
+                    placeholder="e.g. TITLE"
                   />
                 </div>
                 <div>
@@ -176,7 +196,7 @@ const App: React.FC = () => {
                     value={config.centerText}
                     onChange={handleInputChange}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all text-sm"
-                    placeholder="e.g. ASSAM"
+                    placeholder="e.g. BRAND"
                   />
                 </div>
               </div>
@@ -203,8 +223,8 @@ const App: React.FC = () => {
               <i className="fas fa-check-circle text-2xl"></i>
             </div>
             <div>
-              <h3 className="font-bold text-slate-700">Professional Quality</h3>
-              <p className="text-xs text-slate-500 mt-0.5 uppercase tracking-wide">Error correction Level H (30%)</p>
+              <h3 className="font-bold text-slate-700">Auto-Scaling Badge</h3>
+              <p className="text-xs text-slate-500 mt-0.5 uppercase tracking-wide">Adjusts to fit long text safely</p>
             </div>
           </div>
         </section>
@@ -232,13 +252,20 @@ const App: React.FC = () => {
                       className="w-full h-full"
                     />
                     
-                    {/* Center Badge Overlay */}
+                    {/* Center Badge Overlay (Dynamic CSS Scaling) */}
                     {config.centerText && (
                       <div 
-                        className="absolute w-1/4 aspect-square flex items-center justify-center shadow-md transition-all duration-500"
-                        style={{ backgroundColor: config.color }}
+                        className="absolute flex items-center justify-center shadow-lg transition-all duration-300 overflow-hidden px-2 py-1"
+                        style={{ 
+                          backgroundColor: config.color,
+                          minWidth: '25%',
+                          minHeight: '25%',
+                          maxWidth: '35%',
+                          maxHeight: '35%'
+                        }}
                       >
-                        <span className="text-[0.6rem] md:text-xs font-bold text-white uppercase text-center px-1 leading-tight">
+                        <span className="font-bold text-white uppercase text-center break-words line-clamp-2" 
+                              style={{ fontSize: config.centerText.length > 10 ? '0.5rem' : '0.75rem' }}>
                           {config.centerText}
                         </span>
                       </div>
@@ -268,7 +295,7 @@ const App: React.FC = () => {
           {/* Feature Badges */}
           <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 w-full">
              {[
-               { icon: 'fa-vector-square', label: 'Badge', val: config.centerText ? 'Active' : 'Off' },
+               { icon: 'fa-vector-square', label: 'Badge', val: config.centerText ? 'Responsive' : 'Off' },
                { icon: 'fa-shield-alt', label: 'Safety', val: 'Level H' },
                { icon: 'fa-expand', label: 'Res', val: 'High' },
                { icon: 'fa-fingerprint', label: 'Style', val: 'Premium' }
