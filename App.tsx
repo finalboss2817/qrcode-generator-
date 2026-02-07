@@ -21,132 +21,137 @@ const App: React.FC = () => {
     setConfig(prev => ({ ...prev, [name]: value }));
   };
 
-  const downloadQR = useCallback(() => {
-    if (!qrRef.current || !config.content) return;
+  /**
+   * Generates the final styled canvas for both download and sharing
+   */
+  const renderStudioCanvas = useCallback((): Promise<HTMLCanvasElement> => {
+    return new Promise((resolve, reject) => {
+      if (!qrRef.current || !config.content) return reject('No content');
 
-    const svg = qrRef.current;
-    const svgData = new XMLSerializer().serializeToString(svg);
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+      const svg = qrRef.current;
+      const svgData = new XMLSerializer().serializeToString(svg);
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject('No canvas context');
 
-    const img = new Image();
-    const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(svgBlob);
+      const img = new Image();
+      const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(svgBlob);
 
-    img.onload = () => {
-      const qrSize = 600;
-      const cardPadding = 60;
-      const cardWidth = qrSize + (cardPadding * 2);
-      const cardHeight = qrSize + (cardPadding * 2);
-      
-      const framePaddingX = 40;
-      const framePaddingTop = 40;
-      
-      // Calculate Footer Height dynamically based on text length
-      const footerBaseHeight = 180;
-      const footerHeight = config.title ? Math.max(footerBaseHeight, 100 + (config.title.length / 20) * 40) : 80;
-      
-      canvas.width = cardWidth + (framePaddingX * 2);
-      canvas.height = cardHeight + framePaddingTop + footerHeight;
-
-      // 1. Draw Main Frame Background (Theme Color)
-      ctx.fillStyle = config.color;
-      const frameRadius = 40;
-      ctx.beginPath();
-      ctx.roundRect(0, 0, canvas.width, canvas.height, frameRadius);
-      ctx.fill();
-
-      // 2. Draw White Card
-      ctx.fillStyle = '#ffffff';
-      const cardX = framePaddingX;
-      const cardY = framePaddingTop;
-      const cardRadius = 30;
-      ctx.beginPath();
-      ctx.roundRect(cardX, cardY, cardWidth, cardHeight, cardRadius);
-      ctx.fill();
-
-      // 3. Draw QR Code
-      ctx.drawImage(img, cardX + cardPadding, cardY + cardPadding, qrSize, qrSize);
-
-      // 4. Draw Center Badge (Dynamic sizing)
-      if (config.centerText) {
-        ctx.font = 'bold 36px Inter, sans-serif';
-        const textMetrics = ctx.measureText(config.centerText);
-        const padding = 40;
-        const maxBadgeSize = qrSize * 0.35; 
-        const minBadgeSize = 140;
+      img.onload = () => {
+        const qrSize = 600;
+        const cardPadding = 60;
+        const cardWidth = qrSize + (cardPadding * 2);
+        const cardHeight = qrSize + (cardPadding * 2);
         
-        let badgeWidth = Math.max(minBadgeSize, textMetrics.width + padding);
-        let finalBadgeSize = Math.min(maxBadgeSize, badgeWidth);
-        let fontSize = 36;
+        const framePaddingX = 40;
+        const framePaddingTop = 40;
         
-        ctx.font = `bold ${fontSize}px Inter, sans-serif`;
-        while (ctx.measureText(config.centerText).width > (finalBadgeSize - 20) && fontSize > 12) {
-          fontSize -= 2;
-          ctx.font = `bold ${fontSize}px Inter, sans-serif`;
-        }
+        const footerBaseHeight = 180;
+        const footerHeight = config.title ? Math.max(footerBaseHeight, 100 + (config.title.length / 20) * 40) : 80;
+        
+        canvas.width = cardWidth + (framePaddingX * 2);
+        canvas.height = cardHeight + framePaddingTop + footerHeight;
 
-        const bx = cardX + cardPadding + (qrSize / 2) - (finalBadgeSize / 2);
-        const by = cardY + cardPadding + (qrSize / 2) - (finalBadgeSize / 2);
-        
+        // 1. Draw Main Frame Background
         ctx.fillStyle = config.color;
-        ctx.fillRect(bx, by, finalBadgeSize, finalBadgeSize);
-        
+        const frameRadius = 40;
+        ctx.beginPath();
+        ctx.roundRect(0, 0, canvas.width, canvas.height, frameRadius);
+        ctx.fill();
+
+        // 2. Draw White Card
         ctx.fillStyle = '#ffffff';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(config.centerText, bx + (finalBadgeSize / 2), by + (finalBadgeSize / 2));
-      }
+        const cardX = framePaddingX;
+        const cardY = framePaddingTop;
+        const cardRadius = 30;
+        ctx.beginPath();
+        ctx.roundRect(cardX, cardY, cardWidth, cardHeight, cardRadius);
+        ctx.fill();
 
-      // 5. Draw Multi-line Footer Title
-      if (config.title) {
-        ctx.fillStyle = '#ffffff';
-        let fontSize = 64;
-        const maxWidth = canvas.width - (framePaddingX * 4);
-        ctx.font = `500 ${fontSize}px Inter, sans-serif`;
+        // 3. Draw QR Code
+        ctx.drawImage(img, cardX + cardPadding, cardY + cardPadding, qrSize, qrSize);
 
-        // Function to wrap text on canvas
-        const wrapText = (text: string, maxWidth: number) => {
-          const words = text.split(' ');
-          const lines = [];
-          let currentLine = words[0];
-
-          for (let i = 1; i < words.length; i++) {
-            const word = words[i];
-            const width = ctx.measureText(currentLine + " " + word).width;
-            if (width < maxWidth) {
-              currentLine += " " + word;
-            } else {
-              lines.push(currentLine);
-              currentLine = word;
-            }
+        // 4. Draw Center Badge
+        if (config.centerText) {
+          ctx.font = 'bold 36px Inter, sans-serif';
+          const textMetrics = ctx.measureText(config.centerText);
+          const padding = 40;
+          const maxBadgeSize = qrSize * 0.35; 
+          const minBadgeSize = 140;
+          
+          let badgeWidth = Math.max(minBadgeSize, textMetrics.width + padding);
+          let finalBadgeSize = Math.min(maxBadgeSize, badgeWidth);
+          let fontSize = 36;
+          
+          ctx.font = `bold ${fontSize}px Inter, sans-serif`;
+          while (ctx.measureText(config.centerText).width > (finalBadgeSize - 20) && fontSize > 12) {
+            fontSize -= 2;
+            ctx.font = `bold ${fontSize}px Inter, sans-serif`;
           }
-          lines.push(currentLine);
-          return lines;
-        };
 
-        let lines = wrapText(config.title, maxWidth);
-        
-        // Auto-scale font if too many lines
-        if (lines.length > 2) {
-          fontSize = 48;
-          ctx.font = `500 ${fontSize}px Inter, sans-serif`;
-          lines = wrapText(config.title, maxWidth);
+          const bx = cardX + cardPadding + (qrSize / 2) - (finalBadgeSize / 2);
+          const by = cardY + cardPadding + (qrSize / 2) - (finalBadgeSize / 2);
+          
+          ctx.fillStyle = config.color;
+          ctx.fillRect(bx, by, finalBadgeSize, finalBadgeSize);
+          
+          ctx.fillStyle = '#ffffff';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(config.centerText, bx + (finalBadgeSize / 2), by + (finalBadgeSize / 2));
         }
 
-        const lineHeight = fontSize * 1.2;
-        const totalTextHeight = lines.length * lineHeight;
-        const startY = cardY + cardHeight + (footerHeight / 2) - (totalTextHeight / 2) + (fontSize / 2);
+        // 5. Draw Footer
+        if (config.title) {
+          ctx.fillStyle = '#ffffff';
+          let fontSize = 64;
+          const maxWidth = canvas.width - (framePaddingX * 4);
+          ctx.font = `500 ${fontSize}px Inter, sans-serif`;
 
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        
-        lines.forEach((line, index) => {
-          ctx.fillText(line, canvas.width / 2, startY + (index * lineHeight));
-        });
-      }
+          const wrapText = (text: string, maxWidth: number) => {
+            const words = text.split(' ');
+            const lines = [];
+            let currentLine = words[0];
+            for (let i = 1; i < words.length; i++) {
+              const word = words[i];
+              const width = ctx.measureText(currentLine + " " + word).width;
+              if (width < maxWidth) currentLine += " " + word;
+              else { lines.push(currentLine); currentLine = word; }
+            }
+            lines.push(currentLine);
+            return lines;
+          };
 
+          let lines = wrapText(config.title, maxWidth);
+          if (lines.length > 2) {
+            fontSize = 48;
+            ctx.font = `500 ${fontSize}px Inter, sans-serif`;
+            lines = wrapText(config.title, maxWidth);
+          }
+
+          const lineHeight = fontSize * 1.2;
+          const totalTextHeight = lines.length * lineHeight;
+          const startY = cardY + cardHeight + (footerHeight / 2) - (totalTextHeight / 2) + (fontSize / 2);
+
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          lines.forEach((line, index) => {
+            ctx.fillText(line, canvas.width / 2, startY + (index * lineHeight));
+          });
+        }
+
+        URL.revokeObjectURL(url);
+        resolve(canvas);
+      };
+      img.onerror = reject;
+      img.src = url;
+    });
+  }, [config]);
+
+  const downloadQR = async () => {
+    try {
+      const canvas = await renderStudioCanvas();
       const pngUrl = canvas.toDataURL('image/png');
       const downloadLink = document.createElement('a');
       downloadLink.href = pngUrl;
@@ -154,11 +159,32 @@ const App: React.FC = () => {
       document.body.appendChild(downloadLink);
       downloadLink.click();
       document.body.removeChild(downloadLink);
-      URL.revokeObjectURL(url);
-    };
+    } catch (err) {
+      console.error('Failed to download QR:', err);
+    }
+  };
 
-    img.src = url;
-  }, [config]);
+  const shareQR = async () => {
+    try {
+      const canvas = await renderStudioCanvas();
+      canvas.toBlob(async (blob) => {
+        if (!blob) return;
+        const file = new File([blob], `${config.title || 'qrcode'}.png`, { type: 'image/png' });
+        
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: config.title || 'My QR Code',
+            text: 'Generated with Smart QR Studio',
+          });
+        } else {
+          alert("Your browser doesn't support direct file sharing. Please use the Export button to save the image.");
+        }
+      }, 'image/png');
+    } catch (err) {
+      console.error('Failed to share QR:', err);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#f1f5f9] text-slate-900 p-4 md:p-8 flex flex-col items-center">
@@ -178,11 +204,19 @@ const App: React.FC = () => {
             <p className="text-slate-500 font-medium text-sm md:text-base italic">"Design is how it works."</p>
           </div>
         </div>
-        <div className="flex gap-3 justify-center">
+        <div className="flex flex-col sm:flex-row gap-3 justify-center">
+          <button 
+            onClick={shareQR}
+            disabled={!config.content}
+            className={`flex items-center justify-center gap-2 px-6 py-3 rounded-full font-bold transition-all active:scale-95 text-sm ${config.content ? 'bg-white border-2 border-indigo-600 text-indigo-600 hover:bg-indigo-50 shadow-lg' : 'bg-slate-200 text-slate-400 cursor-not-allowed border-transparent'}`}
+          >
+            <i className="fas fa-share-nodes"></i>
+            Share Studio Card
+          </button>
           <button 
             onClick={downloadQR}
             disabled={!config.content}
-            className={`flex items-center gap-2 px-8 py-4 rounded-full font-bold transition-all shadow-xl active:scale-95 text-sm md:text-lg ${config.content ? 'bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-indigo-200' : 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'}`}
+            className={`flex items-center justify-center gap-2 px-8 py-4 rounded-full font-bold transition-all shadow-xl active:scale-95 text-sm md:text-lg ${config.content ? 'bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-indigo-200' : 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'}`}
           >
             <i className="fas fa-cloud-download-alt"></i>
             Export Studio PNG
@@ -191,7 +225,6 @@ const App: React.FC = () => {
       </header>
 
       <main className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        {/* Sidebar Configuration */}
         <section className="lg:col-span-5 space-y-6 order-2 lg:order-1">
           <div className="bg-white rounded-[2rem] p-6 md:p-8 shadow-sm border border-slate-100">
             <h2 className="text-xl font-bold mb-6 flex items-center gap-2 text-slate-700">
@@ -256,16 +289,15 @@ const App: React.FC = () => {
 
           <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm flex items-center gap-4">
             <div className="bg-indigo-50 p-4 rounded-2xl text-indigo-600">
-              <i className="fas fa-text-width text-2xl"></i>
+              <i className="fas fa-share-nodes text-2xl"></i>
             </div>
             <div>
-              <h3 className="font-bold text-slate-700">Wrapping Footer</h3>
-              <p className="text-xs text-slate-500 mt-0.5 uppercase tracking-wide">Multi-line titles supported</p>
+              <h3 className="font-bold text-slate-700">Native Sharing</h3>
+              <p className="text-xs text-slate-500 mt-0.5 uppercase tracking-wide">Share directly to any app</p>
             </div>
           </div>
         </section>
 
-        {/* Live Preview */}
         <section className="lg:col-span-7 flex flex-col items-center order-1 lg:order-2 w-full">
           <div className="w-full bg-slate-200/50 rounded-[3rem] p-8 md:p-12 border-4 border-dashed border-slate-300 flex items-center justify-center min-h-[500px] md:min-h-[700px] relative">
             
@@ -273,7 +305,6 @@ const App: React.FC = () => {
               className="relative shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all duration-500 w-full max-w-[440px] rounded-[2.5rem] flex flex-col overflow-hidden"
               style={{ backgroundColor: config.color }}
             >
-              {/* White Card Section */}
               <div className="m-5 md:m-8 bg-white p-6 md:p-10 rounded-[2rem] flex items-center justify-center relative min-h-[300px]">
                 {config.content ? (
                   <div className="w-full aspect-square relative flex items-center justify-center">
@@ -288,7 +319,6 @@ const App: React.FC = () => {
                       className="w-full h-full"
                     />
                     
-                    {/* Center Badge Overlay */}
                     {config.centerText && (
                       <div 
                         className="absolute flex items-center justify-center shadow-lg transition-all duration-300 overflow-hidden px-2 py-1"
@@ -315,7 +345,6 @@ const App: React.FC = () => {
                 )}
               </div>
 
-              {/* Enhanced Footer Title Section - No truncation, full visibility */}
               <div className={`text-center transition-all duration-300 flex items-center justify-center px-6 ${config.title ? 'pb-8 md:pb-12 opacity-100' : 'pb-0 opacity-0 h-4'}`}>
                 <span 
                   className="text-white font-medium tracking-tight block whitespace-normal break-words leading-tight drop-shadow-sm"
@@ -331,10 +360,9 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Feature Badges */}
           <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 w-full">
              {[
-               { icon: 'fa-align-center', label: 'Layout', val: 'Responsive' },
+               { icon: 'fa-share-nodes', label: 'Share', val: 'Native' },
                { icon: 'fa-shield-alt', label: 'Safety', val: 'Level H' },
                { icon: 'fa-expand', label: 'Res', val: 'High' },
                { icon: 'fa-fingerprint', label: 'Style', val: 'Premium' }
@@ -349,7 +377,6 @@ const App: React.FC = () => {
         </section>
       </main>
 
-      {/* Footer */}
       <footer className="mt-16 md:mt-24 w-full max-w-6xl pt-8 border-t border-slate-200 text-center text-slate-400 text-xs md:text-sm pb-12">
         <p className="mb-2 font-bold text-slate-500 uppercase tracking-[0.2em]">Meena Technologies Studio</p>
         <p>© {new Date().getFullYear()} Professional Grade QR Assets.</p>
