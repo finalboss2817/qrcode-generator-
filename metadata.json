@@ -1,5 +1,5 @@
 {
   "name": "Smart QR Studio",
-  "description": "A high-end QR code generator with real-time customization, smart title suggestions, and high-quality PNG downloads including custom labels.",
+  "description": "A high-end QR code generator with real-time customization and high-quality PNG downloads including custom labels.",
   "requestFramePermissions": []
 }

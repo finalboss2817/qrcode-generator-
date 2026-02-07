@@ -1,8 +1,7 @@
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { PREDEFINED_COLORS, QRConfig } from './types';
-import { GoogleGenAI } from '@google/genai';
 
 const App: React.FC = () => {
   const [config, setConfig] = useState<QRConfig>({
@@ -14,30 +13,11 @@ const App: React.FC = () => {
     margin: 4,
   });
 
-  const [isGeneratingTitle, setIsGeneratingTitle] = useState(false);
   const qrRef = useRef<SVGSVGElement>(null);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setConfig(prev => ({ ...prev, [name]: value }));
-  };
-
-  const suggestTitle = async () => {
-    if (!config.content) return;
-    setIsGeneratingTitle(true);
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: `Given this content: "${config.content}", suggest a short, catchy title (max 3 words) for a QR code label. Output ONLY the title, no quotes.`,
-      });
-      const suggestedTitle = response.text?.trim() || 'Scanned Code';
-      setConfig(prev => ({ ...prev, title: suggestedTitle }));
-    } catch (error) {
-      console.error('Title generation failed', error);
-    } finally {
-      setIsGeneratingTitle(false);
-    }
   };
 
   const downloadQR = useCallback(() => {
@@ -54,20 +34,15 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(svgBlob);
 
     img.onload = () => {
-      // Setup canvas size with padding for the title
       const padding = 60;
       const titleHeight = config.title ? 80 : 0;
       canvas.width = 512 + padding;
       canvas.height = 512 + padding + titleHeight;
 
-      // Fill Background
       ctx.fillStyle = config.bgColor;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Draw QR Code centered
       ctx.drawImage(img, padding / 2, padding / 2, 512, 512);
 
-      // Draw Title
       if (config.title) {
         ctx.fillStyle = config.color;
         ctx.font = 'bold 40px Inter, sans-serif';
@@ -76,7 +51,6 @@ const App: React.FC = () => {
         ctx.fillText(config.title, canvas.width / 2, 512 + padding / 2 + 10);
       }
 
-      // Trigger Download
       const pngUrl = canvas.toDataURL('image/png');
       const downloadLink = document.createElement('a');
       downloadLink.href = pngUrl;
@@ -101,13 +75,11 @@ const App: React.FC = () => {
             </span>
             Smart QR Studio
           </h1>
-          <div className="mt-2 space-y-1">
-            <p className="text-slate-500 font-medium">Professional QR codes with AI-powered labeling.</p>
-            <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest flex items-center justify-center md:justify-start gap-2">
-              <span className="w-4 h-px bg-indigo-200"></span>
+          <div className="mt-2">
+            <p className="text-xs md:text-sm font-bold text-indigo-600 uppercase tracking-[0.2em] mb-1">
               A product by Meena Technologies
-              <span className="w-4 h-px bg-indigo-200"></span>
             </p>
+            <p className="text-slate-500 font-medium text-sm md:text-base">Professional QR codes with custom labeling.</p>
           </div>
         </div>
         <div className="flex gap-3 justify-center">
@@ -131,7 +103,6 @@ const App: React.FC = () => {
             </h2>
 
             <div className="space-y-6">
-              {/* Content Input */}
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">QR Content (URL, Text, Link)</label>
                 <textarea
@@ -140,22 +111,13 @@ const App: React.FC = () => {
                   onChange={handleInputChange}
                   rows={3}
                   className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all resize-none text-sm md:text-base"
-                  placeholder="https://example.com"
+                  placeholder="Paste your content here..."
                 />
               </div>
 
-              {/* Title Input */}
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2 flex justify-between items-center">
-                  Label Title (Display Only)
-                  <button 
-                    onClick={suggestTitle}
-                    disabled={isGeneratingTitle || !config.content}
-                    className="text-[10px] md:text-xs text-indigo-600 hover:text-indigo-800 font-bold uppercase tracking-wider disabled:opacity-50"
-                  >
-                    {isGeneratingTitle ? <i className="fas fa-spinner fa-spin mr-1"></i> : <i className="fas fa-wand-magic-sparkles mr-1"></i>}
-                    AI Suggest
-                  </button>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Label Title (Visual Only)
                 </label>
                 <input
                   type="text"
@@ -163,11 +125,10 @@ const App: React.FC = () => {
                   value={config.title}
                   onChange={handleInputChange}
                   className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all text-sm md:text-base"
-                  placeholder="Enter a title..."
+                  placeholder="Enter a title to show below the QR..."
                 />
               </div>
 
-              {/* Color Dropdown */}
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">QR Color</label>
                 <div className="relative">
@@ -189,13 +150,12 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* Color Palette Visualizer */}
               <div className="flex flex-wrap gap-2 pt-2">
                 {PREDEFINED_COLORS.map(color => (
                   <button
                     key={color.value}
                     onClick={() => setConfig(prev => ({ ...prev, color: color.value }))}
-                    className={`w-8 h-8 rounded-lg border-2 transition-all ${config.color === color.value ? 'border-slate-800 scale-110' : 'border-transparent hover:scale-105'}`}
+                    className={`w-8 h-8 rounded-lg border-2 transition-all ${config.color === color.value ? 'border-slate-800 scale-110 shadow-md' : 'border-transparent hover:scale-105'}`}
                     style={{ backgroundColor: color.value }}
                     title={color.name}
                   />
@@ -204,42 +164,38 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-indigo-50 rounded-2xl p-6 border border-indigo-100 hidden md:block">
-            <div className="flex gap-4">
-              <div className="bg-white p-3 rounded-xl shadow-sm self-start">
-                <i className="fas fa-lightbulb text-indigo-600"></i>
-              </div>
-              <div>
-                <h3 className="font-bold text-indigo-900">Pro Tip</h3>
-                <p className="text-sm text-indigo-700 mt-1">High contrast colors like Deep Indigo or Classic Black work best for reliable scanning across all mobile devices.</p>
-              </div>
+          <div className="bg-indigo-50 rounded-2xl p-6 border border-indigo-100 hidden md:flex items-start gap-4">
+            <div className="bg-white p-3 rounded-xl shadow-sm">
+              <i className="fas fa-lightbulb text-indigo-600"></i>
+            </div>
+            <div>
+              <h3 className="font-bold text-indigo-900">Pro Tip</h3>
+              <p className="text-sm text-indigo-700 mt-1 leading-relaxed">High contrast colors like Deep Indigo or Classic Black ensure the best scanning accuracy across all mobile devices.</p>
             </div>
           </div>
         </section>
 
         {/* Live Preview */}
         <section className="lg:col-span-7 flex flex-col items-center order-1 lg:order-2 w-full">
-          <div className="w-full bg-white rounded-3xl p-6 md:p-12 shadow-sm border border-slate-100 flex flex-col items-center justify-center min-h-[400px] md:min-h-[500px] relative overflow-hidden">
-            {/* Background pattern */}
+          <div className="w-full bg-white rounded-3xl p-6 md:p-12 shadow-sm border border-slate-100 flex flex-col items-center justify-center min-h-[350px] md:min-h-[500px] relative overflow-hidden">
             <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: 'radial-gradient(#4f46e5 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
 
-            <div className="relative z-10 flex flex-col items-center bg-white p-6 md:p-8 rounded-2xl shadow-xl border border-slate-50 max-w-full">
-              <div className="bg-slate-50 p-4 md:p-6 rounded-xl border border-slate-100 mb-4 md:mb-6 group cursor-default max-w-full flex items-center justify-center">
+            <div className="relative z-10 flex flex-col items-center bg-white p-6 md:p-10 rounded-3xl shadow-2xl border border-slate-50 w-full max-w-[400px]">
+              <div className="bg-slate-50 p-4 md:p-6 rounded-2xl border border-slate-100 mb-4 md:mb-8 w-full aspect-square flex items-center justify-center overflow-hidden">
                 {config.content ? (
-                  <div className="max-w-full overflow-hidden flex items-center justify-center">
-                    <QRCodeSVG
-                      ref={qrRef}
-                      value={config.content}
-                      size={280}
-                      fgColor={config.color}
-                      bgColor={config.bgColor}
-                      level="H"
-                      includeMargin={true}
-                      className="transition-all duration-300 w-full h-auto max-w-[280px]"
-                    />
-                  </div>
+                  <QRCodeSVG
+                    ref={qrRef}
+                    value={config.content}
+                    size={280}
+                    fgColor={config.color}
+                    bgColor={config.bgColor}
+                    level="H"
+                    includeMargin={true}
+                    className="transition-all duration-300 w-full h-full max-w-full"
+                  />
                 ) : (
-                  <div className="w-[200px] h-[200px] md:w-[280px] md:h-[280px] flex items-center justify-center text-slate-300 italic text-sm">
+                  <div className="text-center text-slate-300 italic text-sm p-4">
+                    <i className="fas fa-i-cursor block text-3xl mb-3 opacity-20"></i>
                     Enter content to generate QR
                   </div>
                 )}
@@ -250,47 +206,42 @@ const App: React.FC = () => {
                   className="text-center transition-all duration-300 w-full"
                   style={{ color: config.color }}
                 >
-                  <span className="text-xl md:text-2xl font-bold tracking-tight block px-4 py-1 rounded-lg truncate max-w-[300px] mx-auto">
+                  <span className="text-xl md:text-3xl font-bold tracking-tight block px-4 py-1 truncate">
                     {config.title}
                   </span>
                 </div>
               )}
             </div>
 
-            <p className="mt-8 md:mt-12 text-slate-400 text-xs md:text-sm flex items-center gap-2">
-              <i className="fas fa-eye"></i>
-              Live Preview Updates Instantly
+            <p className="mt-8 text-slate-400 text-xs md:text-sm font-medium flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+              </span>
+              Live Preview
             </p>
           </div>
 
-          <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 w-full">
-             <div className="bg-white p-3 md:p-4 rounded-2xl border border-slate-100 text-center">
-               <span className="block text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Type</span>
-               <span className="font-semibold text-slate-700 text-sm md:text-base">SVG/PNG</span>
-             </div>
-             <div className="bg-white p-3 md:p-4 rounded-2xl border border-slate-100 text-center">
-               <span className="block text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Level</span>
-               <span className="font-semibold text-slate-700 text-sm md:text-base">High (30%)</span>
-             </div>
-             <div className="bg-white p-3 md:p-4 rounded-2xl border border-slate-100 text-center">
-               <span className="block text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Size</span>
-               <span className="font-semibold text-slate-700 text-sm md:text-base">512px</span>
-             </div>
-             <div className="bg-white p-3 md:p-4 rounded-2xl border border-slate-100 text-center">
-               <span className="block text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Color</span>
-               <div className="flex items-center justify-center gap-2">
-                  <div className="w-2 h-2 md:w-3 md:h-3 rounded-full" style={{ backgroundColor: config.color }}></div>
-                  <span className="font-semibold text-slate-700 uppercase text-[10px] md:text-sm">{config.color}</span>
+          <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 w-full">
+             {[
+               { label: 'Type', val: 'PNG / SVG' },
+               { label: 'Level', val: 'High (30%)' },
+               { label: 'Density', val: 'Optimized' },
+               { label: 'Branding', val: 'Enabled' }
+             ].map((stat, i) => (
+               <div key={i} className="bg-white p-3 md:p-4 rounded-2xl border border-slate-100 text-center shadow-sm">
+                 <span className="block text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">{stat.label}</span>
+                 <span className="font-semibold text-slate-700 text-xs md:text-base">{stat.val}</span>
                </div>
-             </div>
+             ))}
           </div>
         </section>
       </main>
 
       {/* Footer */}
-      <footer className="mt-20 w-full max-w-6xl pt-8 border-t border-slate-200 text-center text-slate-400 text-sm pb-12">
-        <p className="mb-2">© {new Date().getFullYear()} Meena Technologies. All rights reserved.</p>
-        <p>Smart QR Studio is designed for professional use cases.</p>
+      <footer className="mt-16 md:mt-24 w-full max-w-6xl pt-8 border-t border-slate-200 text-center text-slate-400 text-xs md:text-sm pb-12">
+        <p className="mb-2 font-semibold text-slate-500 uppercase tracking-wider">Meena Technologies</p>
+        <p>© {new Date().getFullYear()} Smart QR Studio. Built for professional sharing.</p>
       </footer>
     </div>
   );
