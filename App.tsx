@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { PREDEFINED_COLORS, QRConfig } from './types';
 
@@ -42,7 +42,10 @@ const App: React.FC = () => {
       
       const framePaddingX = 40;
       const framePaddingTop = 40;
-      const footerHeight = config.title ? 180 : 80;
+      
+      // Calculate Footer Height dynamically based on text length
+      const footerBaseHeight = 180;
+      const footerHeight = config.title ? Math.max(footerBaseHeight, 100 + (config.title.length / 20) * 40) : 80;
       
       canvas.width = cardWidth + (framePaddingX * 2);
       canvas.height = cardHeight + framePaddingTop + footerHeight;
@@ -71,19 +74,13 @@ const App: React.FC = () => {
         ctx.font = 'bold 36px Inter, sans-serif';
         const textMetrics = ctx.measureText(config.centerText);
         const padding = 40;
-        
-        // Calculate needed size based on text, but cap it at 30% of QR size for scannability
-        const maxBadgeSize = qrSize * 0.3; 
+        const maxBadgeSize = qrSize * 0.35; 
         const minBadgeSize = 140;
         
         let badgeWidth = Math.max(minBadgeSize, textMetrics.width + padding);
-        let badgeHeight = minBadgeSize;
-
-        // If it's too wide, we make it a rectangle or shrink font
         let finalBadgeSize = Math.min(maxBadgeSize, badgeWidth);
         let fontSize = 36;
         
-        // Shrink font if text still doesn't fit in the max allowed badge size
         ctx.font = `bold ${fontSize}px Inter, sans-serif`;
         while (ctx.measureText(config.centerText).width > (finalBadgeSize - 20) && fontSize > 12) {
           fontSize -= 2;
@@ -102,13 +99,52 @@ const App: React.FC = () => {
         ctx.fillText(config.centerText, bx + (finalBadgeSize / 2), by + (finalBadgeSize / 2));
       }
 
-      // 5. Draw Title Footer
+      // 5. Draw Multi-line Footer Title
       if (config.title) {
         ctx.fillStyle = '#ffffff';
-        ctx.font = '500 64px Inter, sans-serif';
+        let fontSize = 64;
+        const maxWidth = canvas.width - (framePaddingX * 4);
+        ctx.font = `500 ${fontSize}px Inter, sans-serif`;
+
+        // Function to wrap text on canvas
+        const wrapText = (text: string, maxWidth: number) => {
+          const words = text.split(' ');
+          const lines = [];
+          let currentLine = words[0];
+
+          for (let i = 1; i < words.length; i++) {
+            const word = words[i];
+            const width = ctx.measureText(currentLine + " " + word).width;
+            if (width < maxWidth) {
+              currentLine += " " + word;
+            } else {
+              lines.push(currentLine);
+              currentLine = word;
+            }
+          }
+          lines.push(currentLine);
+          return lines;
+        };
+
+        let lines = wrapText(config.title, maxWidth);
+        
+        // Auto-scale font if too many lines
+        if (lines.length > 2) {
+          fontSize = 48;
+          ctx.font = `500 ${fontSize}px Inter, sans-serif`;
+          lines = wrapText(config.title, maxWidth);
+        }
+
+        const lineHeight = fontSize * 1.2;
+        const totalTextHeight = lines.length * lineHeight;
+        const startY = cardY + cardHeight + (footerHeight / 2) - (totalTextHeight / 2) + (fontSize / 2);
+
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(config.title, canvas.width / 2, cardY + cardHeight + (footerHeight / 2));
+        
+        lines.forEach((line, index) => {
+          ctx.fillText(line, canvas.width / 2, startY + (index * lineHeight));
+        });
       }
 
       const pngUrl = canvas.toDataURL('image/png');
@@ -220,11 +256,11 @@ const App: React.FC = () => {
 
           <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm flex items-center gap-4">
             <div className="bg-indigo-50 p-4 rounded-2xl text-indigo-600">
-              <i className="fas fa-check-circle text-2xl"></i>
+              <i className="fas fa-text-width text-2xl"></i>
             </div>
             <div>
-              <h3 className="font-bold text-slate-700">Auto-Scaling Badge</h3>
-              <p className="text-xs text-slate-500 mt-0.5 uppercase tracking-wide">Adjusts to fit long text safely</p>
+              <h3 className="font-bold text-slate-700">Wrapping Footer</h3>
+              <p className="text-xs text-slate-500 mt-0.5 uppercase tracking-wide">Multi-line titles supported</p>
             </div>
           </div>
         </section>
@@ -252,7 +288,7 @@ const App: React.FC = () => {
                       className="w-full h-full"
                     />
                     
-                    {/* Center Badge Overlay (Dynamic CSS Scaling) */}
+                    {/* Center Badge Overlay */}
                     {config.centerText && (
                       <div 
                         className="absolute flex items-center justify-center shadow-lg transition-all duration-300 overflow-hidden px-2 py-1"
@@ -279,9 +315,12 @@ const App: React.FC = () => {
                 )}
               </div>
 
-              {/* Title Section */}
-              <div className={`text-center transition-all duration-300 ${config.title ? 'pb-8 md:pb-12 px-6 opacity-100' : 'pb-0 px-0 opacity-0 h-4'}`}>
-                <span className="text-white text-2xl md:text-4xl font-medium tracking-tight block truncate drop-shadow-sm">
+              {/* Enhanced Footer Title Section - No truncation, full visibility */}
+              <div className={`text-center transition-all duration-300 flex items-center justify-center px-6 ${config.title ? 'pb-8 md:pb-12 opacity-100' : 'pb-0 opacity-0 h-4'}`}>
+                <span 
+                  className="text-white font-medium tracking-tight block whitespace-normal break-words leading-tight drop-shadow-sm"
+                  style={{ fontSize: config.title.length > 20 ? '1.5rem' : '2.25rem' }}
+                >
                   {config.title}
                 </span>
               </div>
@@ -295,7 +334,7 @@ const App: React.FC = () => {
           {/* Feature Badges */}
           <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 w-full">
              {[
-               { icon: 'fa-vector-square', label: 'Badge', val: config.centerText ? 'Responsive' : 'Off' },
+               { icon: 'fa-align-center', label: 'Layout', val: 'Responsive' },
                { icon: 'fa-shield-alt', label: 'Safety', val: 'Level H' },
                { icon: 'fa-expand', label: 'Res', val: 'High' },
                { icon: 'fa-fingerprint', label: 'Style', val: 'Premium' }
