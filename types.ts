@@ -2,6 +2,7 @@
 export interface QRConfig {
   content: string;
   title: string;
+  centerText: string;
   color: string;
   bgColor: string;
   size: number;
@@ -14,10 +15,10 @@ export interface ColorOption {
 }
 
 export const PREDEFINED_COLORS: ColorOption[] = [
-  { name: 'Classic Black', value: '#000000' },
+  { name: 'Onyx Black', value: '#000000' },
   { name: 'Royal Blue', value: '#1e40af' },
-  { name: 'Emerald Green', value: '#065f46' },
-  { name: 'Ruby Red', value: '#991b1b' },
-  { name: 'Deep Purple', value: '#5b21b6' },
-  { name: 'Midnight Indigo', value: '#312e81' },
+  { name: 'Forest Green', value: '#064e3b' },
+  { name: 'Wine Red', value: '#7f1d1d' },
+  { name: 'Deep Purple', value: '#4c1d95' },
+  { name: 'Slate Gray', value: '#334155' },
 ];
