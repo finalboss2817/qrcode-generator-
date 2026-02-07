@@ -5,9 +5,9 @@ import { PREDEFINED_COLORS, QRConfig } from './types';
 
 const App: React.FC = () => {
   const [config, setConfig] = useState<QRConfig>({
-    content: 'https://google.com',
-    title: 'Kamakhya temple',
-    centerText: 'Assam',
+    content: '',
+    title: '',
+    centerText: '',
     color: '#000000',
     bgColor: '#ffffff',
     size: 512,
@@ -22,7 +22,7 @@ const App: React.FC = () => {
   };
 
   const downloadQR = useCallback(() => {
-    if (!qrRef.current) return;
+    if (!qrRef.current || !config.content) return;
 
     const svg = qrRef.current;
     const svgData = new XMLSerializer().serializeToString(svg);
@@ -49,7 +49,6 @@ const App: React.FC = () => {
 
       // 1. Draw Main Frame Background (Theme Color)
       ctx.fillStyle = config.color;
-      // Draw rounded rectangle for the whole thing
       const frameRadius = 40;
       ctx.beginPath();
       ctx.roundRect(0, 0, canvas.width, canvas.height, frameRadius);
@@ -126,7 +125,8 @@ const App: React.FC = () => {
         <div className="flex gap-3 justify-center">
           <button 
             onClick={downloadQR}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-full font-bold transition-all shadow-xl hover:shadow-indigo-200 active:scale-95 text-sm md:text-lg"
+            disabled={!config.content}
+            className={`flex items-center gap-2 px-8 py-4 rounded-full font-bold transition-all shadow-xl active:scale-95 text-sm md:text-lg ${config.content ? 'bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-indigo-200' : 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'}`}
           >
             <i className="fas fa-cloud-download-alt"></i>
             Export Studio PNG
@@ -152,7 +152,7 @@ const App: React.FC = () => {
                   onChange={handleInputChange}
                   rows={2}
                   className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all resize-none text-sm md:text-base"
-                  placeholder="URL or Text..."
+                  placeholder="Paste URL, Text, or Document link here..."
                 />
               </div>
 
@@ -165,7 +165,7 @@ const App: React.FC = () => {
                     value={config.title}
                     onChange={handleInputChange}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all text-sm"
-                    placeholder="e.g. My Temple"
+                    placeholder="e.g. Kamakhya temple"
                   />
                 </div>
                 <div>
@@ -203,30 +203,29 @@ const App: React.FC = () => {
               <i className="fas fa-check-circle text-2xl"></i>
             </div>
             <div>
-              <h3 className="font-bold text-slate-700">High Reliability</h3>
+              <h3 className="font-bold text-slate-700">Professional Quality</h3>
               <p className="text-xs text-slate-500 mt-0.5 uppercase tracking-wide">Error correction Level H (30%)</p>
             </div>
           </div>
         </section>
 
-        {/* Live Preview - Replicating the Shared Image Style */}
+        {/* Live Preview */}
         <section className="lg:col-span-7 flex flex-col items-center order-1 lg:order-2 w-full">
           <div className="w-full bg-slate-200/50 rounded-[3rem] p-8 md:p-12 border-4 border-dashed border-slate-300 flex items-center justify-center min-h-[500px] md:min-h-[700px] relative">
             
-            {/* The "Card in Frame" Preview */}
             <div 
               className="relative shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all duration-500 w-full max-w-[440px] rounded-[2.5rem] flex flex-col overflow-hidden"
               style={{ backgroundColor: config.color }}
             >
               {/* White Card Section */}
-              <div className="m-5 md:m-8 bg-white p-6 md:p-10 rounded-[2rem] flex items-center justify-center relative">
+              <div className="m-5 md:m-8 bg-white p-6 md:p-10 rounded-[2rem] flex items-center justify-center relative min-h-[300px]">
                 {config.content ? (
                   <div className="w-full aspect-square relative flex items-center justify-center">
                     <QRCodeSVG
                       ref={qrRef}
                       value={config.content}
                       size={320}
-                      fgColor="#000000" // Always black QR modules for classic feel
+                      fgColor="#000000"
                       bgColor="#ffffff"
                       level="H"
                       includeMargin={false}
@@ -254,13 +253,11 @@ const App: React.FC = () => {
               </div>
 
               {/* Title Section */}
-              {config.title && (
-                <div className="pb-8 md:pb-12 px-6 text-center">
-                  <span className="text-white text-2xl md:text-4xl font-medium tracking-tight block truncate drop-shadow-sm">
-                    {config.title}
-                  </span>
-                </div>
-              )}
+              <div className={`text-center transition-all duration-300 ${config.title ? 'pb-8 md:pb-12 px-6 opacity-100' : 'pb-0 px-0 opacity-0 h-4'}`}>
+                <span className="text-white text-2xl md:text-4xl font-medium tracking-tight block truncate drop-shadow-sm">
+                  {config.title}
+                </span>
+              </div>
             </div>
 
             <div className="absolute top-6 right-8 text-slate-400 font-bold text-[10px] uppercase tracking-[0.3em]">
@@ -271,9 +268,9 @@ const App: React.FC = () => {
           {/* Feature Badges */}
           <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4 w-full">
              {[
-               { icon: 'fa-vector-square', label: 'Badge', val: 'Active' },
+               { icon: 'fa-vector-square', label: 'Badge', val: config.centerText ? 'Active' : 'Off' },
                { icon: 'fa-shield-alt', label: 'Safety', val: 'Level H' },
-               { icon: 'fa-expand', label: 'Res', val: '4000px' },
+               { icon: 'fa-expand', label: 'Res', val: 'High' },
                { icon: 'fa-fingerprint', label: 'Style', val: 'Premium' }
              ].map((stat, i) => (
                <div key={i} className="bg-white p-4 rounded-3xl border border-slate-100 flex items-center justify-center flex-col shadow-sm group hover:border-indigo-200 transition-all cursor-default">
