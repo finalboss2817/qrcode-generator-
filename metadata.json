@@ -1,5 +1,8 @@
 {
-  "name": "Smart QR Studio",
-  "description": "A high-end QR code generator with real-time customization and high-quality PNG downloads including custom labels.",
-  "requestFramePermissions": []
+  "name": "QR Code Generator",
+  "description": "A clean, high-resolution QR code generator with live poster previews, custom badge decals, multi-channel sharing (AirDrop, WhatsApp, Telegram, X, Email), and SVG/PNG exports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

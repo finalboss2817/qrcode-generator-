@@ -1,0 +1,51 @@
+{
+  "entities": {
+    "QRCode": {
+      "title": "QR Code configuration",
+      "description": "Information about a custom configured QR with colors, styling, and scan counters",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "content": { "type": "string" },
+        "qrType": { "type": "string", "enum": ["static", "dynamic"] },
+        "title": { "type": "string" },
+        "centerText": { "type": "string" },
+        "centerIcon": { "type": "string" },
+        "color": { "type": "string" },
+        "bgColor": { "type": "string" },
+        "size": { "type": "number" },
+        "margin": { "type": "number" },
+        "exportScale": { "type": "number" },
+        "totalScans": { "type": "number" },
+        "uniqueScans": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "content", "qrType", "color", "bgColor", "createdAt"]
+    },
+    "Scan": {
+      "title": "Redirect scan telemetry event",
+      "description": "Logged record containing user-agent, device type, approximate timezone, and timestamp",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "userAgent": { "type": "string" },
+        "device": { "type": "string" },
+        "location": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "userAgent", "device", "location"]
+    }
+  },
+  "firestore": {
+    "/qrcodes/{qrId}": {
+      "schema": "QRCode",
+      "description": "Stored QR configurations"
+    },
+    "/qrcodes/{qrId}/scans/{scanId}": {
+      "schema": "Scan",
+      "description": "Live scans telemetry for a specific QR code"
+    }
+  }
+}

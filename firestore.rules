@@ -1,0 +1,109 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net (Rule 1)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reuseable, hardened, global helpers (Phase 3)
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(qrData) {
+      return isSignedIn() && qrData.ownerId == request.auth.uid;
+    }
+
+    // Schema Validation Helpers (Rule 2)
+    function isValidQRCode(data) {
+      return data.id is string && data.id.size() <= 64 &&
+             data.ownerId is string && data.ownerId.size() <= 64 &&
+             data.content is string && data.content.size() <= 2048 &&
+             data.qrType is string && (data.qrType == 'static' || data.qrType == 'dynamic') &&
+             data.color is string && data.color.size() <= 16 &&
+             data.bgColor is string && data.bgColor.size() <= 16 &&
+             (data.title == null || (data.title is string && data.title.size() <= 128)) &&
+             (data.centerText == null || (data.centerText is string && data.centerText.size() <= 32)) &&
+             (data.centerIcon == null || (data.centerIcon is string && data.centerIcon.size() <= 32)) &&
+             (data.size == null || data.size is int) &&
+             (data.margin == null || data.margin is int) &&
+             (data.exportScale == null || data.exportScale is int) &&
+             (data.totalScans == null || data.totalScans is int) &&
+             (data.uniqueScans == null || data.uniqueScans is int) &&
+             data.createdAt is timestamp &&
+             (data.updatedAt == null || data.updatedAt is timestamp);
+    }
+
+    // Match statement for QR Codes
+    match /qrcodes/{qrId} {
+      // Direct reading is public so scanners on-ground can read configurations and follow redirects.
+      allow get: if isValidId(qrId);
+      allow list: if isSignedIn(); // Users can list their codes, filtered securely on client
+
+      allow create: if isSignedIn() &&
+                    isValidId(qrId) &&
+                    incoming().id == qrId &&
+                    incoming().ownerId == request.auth.uid &&
+                    isValidQRCode(incoming()) &&
+                    incoming().createdAt == request.time;
+
+      allow update: if isValidId(qrId) && (
+        // Action 1: Owner editing metadata/dynamic urls
+        (
+          isOwner(existing()) &&
+          incoming().id == existing().id &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          isValidQRCode(incoming()) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'content', 'title', 'centerText', 'centerIcon', 'color', 
+            'bgColor', 'size', 'margin', 'exportScale', 'qrType', 'updatedAt'
+          ])
+        ) ||
+        // Action 2: Anyone scanning on-ground can increment telemetry stats
+        (
+          incoming().id == existing().id &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().content == existing().content &&
+          incoming().qrType == existing().qrType &&
+          incoming().color == existing().color &&
+          incoming().bgColor == existing().bgColor &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['totalScans', 'uniqueScans'])
+        )
+      );
+
+      allow delete: if isValidId(qrId) && isOwner(existing());
+
+      // Master Gate: Subcollection for individual scans
+      match /scans/{scanId} {
+        // Scans lists can ONLY be viewed by the QR owner
+        allow read: if isSignedIn() && get(/databases/$(database)/documents/qrcodes/$(qrId)).data.ownerId == request.auth.uid;
+        
+        // Anyone on-ground can post a write-once telemetry point
+        allow create: if isValidId(scanId) &&
+                      incoming().id == scanId &&
+                      incoming().timestamp == request.time &&
+                      incoming().userAgent is string && incoming().userAgent.size() <= 512 &&
+                      incoming().device is string && incoming().device.size() <= 128 &&
+                      incoming().location is string && incoming().location.size() <= 128;
+                      
+        allow update, delete: if false;
+      }
+    }
+  }
+}
