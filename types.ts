@@ -1,3 +1,27 @@
+export type BorderThemeId =
+  | 'classic'
+  | 'birthday'
+  | 'wedding'
+  | 'cyberpunk'
+  | 'vip_gold'
+  | 'food_bistro'
+  | 'party_fun';
+
+export interface BorderThemeOption {
+  id: BorderThemeId;
+  name: string;
+  category: string;
+  tagline: string;
+  emoji: string;
+  badge: string;
+  defaultColor: string;
+  defaultBg: string;
+  defaultCenterIcon: string;
+  defaultTitle: string;
+  bannerText: string;
+  has3DConfetti?: boolean;
+}
+
 export interface QRConfig {
   content: string;
   title: string;
@@ -8,6 +32,10 @@ export interface QRConfig {
   size: number;
   margin: number;
   exportScale: number;
+  borderTheme: BorderThemeId;
+  enable3DTilt: boolean;
+  enableAnimations: boolean;
+  frameBannerText?: string;
 }
 
 export interface ColorOption {

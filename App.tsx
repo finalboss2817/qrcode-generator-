@@ -30,13 +30,18 @@ import {
   PREDEFINED_COLORS,
   ICON_OPTIONS,
   QRConfig,
+  BorderThemeId,
 } from './types';
+import { getBorderThemeById } from './borderThemes';
+import { ThemedQRPoster } from './components/ThemedQRPoster';
+import { BorderThemeSelector } from './components/BorderThemeSelector';
+import { drawThemeDecorationsOnCanvas } from './borderCanvasRenderer';
 
 const App: React.FC = () => {
   // Core QR parameters
   const [config, setConfig] = useState<QRConfig>({
-    content: '',
-    title: '',
+    content: 'https://meenatechnologies.com',
+    title: 'Scan to Connect with Us',
     centerText: '',
     centerIcon: 'none',
     color: '#1d4ed8',
@@ -44,6 +49,10 @@ const App: React.FC = () => {
     size: 512,
     margin: 3,
     exportScale: 2,
+    borderTheme: 'birthday',
+    enable3DTilt: true,
+    enableAnimations: true,
+    frameBannerText: '🎉 CELEBRATE WITH US 🎉',
   });
 
   const [activePreset, setActivePreset] = useState<string>('');
@@ -79,7 +88,12 @@ const App: React.FC = () => {
     const { name, value } = e.target;
     setConfig((prev) => ({
       ...prev,
-      [name]: name === 'exportScale' || name === 'margin' || name === 'size' ? Number(value) : value,
+      [name]:
+        name === 'exportScale' || name === 'margin' || name === 'size'
+          ? Number(value)
+          : name === 'centerText'
+          ? value.slice(0, 5)
+          : value,
     }));
   };
 
@@ -171,6 +185,19 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSelectBorderTheme = (themeId: BorderThemeId) => {
+    const theme = getBorderThemeById(themeId);
+    setConfig((prev) => ({
+      ...prev,
+      borderTheme: themeId,
+      color: theme.defaultColor,
+      bgColor: theme.defaultBg,
+      centerIcon: theme.defaultCenterIcon,
+      title: prev.title || theme.defaultTitle,
+      frameBannerText: theme.bannerText,
+    }));
+  };
+
   /**
    * Generates crisp export canvas with frame, badge decal, and custom title
    */
@@ -196,8 +223,10 @@ const App: React.FC = () => {
         const cardHeight = qrSize + cardPadding * 2;
 
         const framePaddingX = 36 * scale;
-        const framePaddingTop = 36 * scale;
-        const footerHeight = config.title.trim() ? 130 * scale : 44 * scale;
+        const hasBanner = Boolean(config.frameBannerText || config.borderTheme !== 'classic');
+        const framePaddingTop = (hasBanner ? 56 : 36) * scale;
+        // Title Caption
+        const footerHeight = config.title.trim() ? 80 * scale : 44 * scale;
 
         canvas.width = cardWidth + framePaddingX * 2;
         canvas.height = cardHeight + framePaddingTop + footerHeight;
@@ -224,9 +253,9 @@ const App: React.FC = () => {
         // Center Emblem Decal
         const activeBadgeValue = getBadgeSymbol(config.centerIcon, config.centerText);
         if (config.centerIcon !== 'none' && activeBadgeValue) {
-          const badgeSize = Math.min(qrSize * 0.26, 120 * scale);
-          const bx = cardX + cardPadding + qrSize / 2 - badgeSize / 2;
-          const by = cardY + cardPadding + qrSize / 2 - badgeSize / 2;
+          const badgeSize = Math.min(qrSize * 0.24, 110 * scale);
+          const bx = cardX + cardPadding + (qrSize - badgeSize) / 2;
+          const by = cardY + cardPadding + (qrSize - badgeSize) / 2;
 
           ctx.fillStyle = config.color;
           ctx.beginPath();
@@ -240,10 +269,21 @@ const App: React.FC = () => {
           ctx.fillStyle = '#ffffff';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          const fontSize = Math.min(34 * scale, (badgeSize / (activeBadgeValue.length || 1)) * 1.4);
+          const fontSize = Math.min(34 * scale, (badgeSize / Math.max(1, activeBadgeValue.length)) * 1.45);
           ctx.font = `bold ${fontSize}px 'Plus Jakarta Sans', sans-serif`;
           ctx.fillText(activeBadgeValue, bx + badgeSize / 2, by + badgeSize / 2);
         }
+
+        // Draw Themed Border Decorations (Balloons, Confetti, Laurels, HUD brackets, etc.)
+        drawThemeDecorationsOnCanvas(ctx, config, {
+          width: canvas.width,
+          height: canvas.height,
+          cardX,
+          cardY,
+          cardWidth,
+          cardHeight,
+          scale,
+        });
 
         // Title Caption
         if (config.title.trim()) {
@@ -252,14 +292,8 @@ const App: React.FC = () => {
           ctx.font = `600 ${fontSize}px 'Plus Jakarta Sans', sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          const titleY = cardY + cardHeight + footerHeight / 2 - 8 * scale;
+          const titleY = cardY + cardHeight + footerHeight / 2;
           ctx.fillText(config.title, canvas.width / 2, titleY);
-
-          // Subtitle branding on export
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-          const subFontSize = 18 * scale;
-          ctx.font = `500 ${subFontSize}px 'Plus Jakarta Sans', sans-serif`;
-          ctx.fillText('A venture by Meena Technologies', canvas.width / 2, titleY + 36 * scale);
         }
 
         URL.revokeObjectURL(url);
@@ -287,9 +321,6 @@ const App: React.FC = () => {
       document.body.appendChild(downloadLink);
       downloadLink.click();
       document.body.removeChild(downloadLink);
-
-      const updated = logExportOrShare('png');
-      setAnalytics(updated);
     } catch (err) {
       console.error('Download error:', err);
     } finally {
@@ -300,7 +331,46 @@ const App: React.FC = () => {
   const downloadSVG = () => {
     if (!qrRef.current || !config.content.trim()) return;
     const svgElement = qrRef.current;
-    const svgString = new XMLSerializer().serializeToString(svgElement);
+    const clone = svgElement.cloneNode(true) as SVGSVGElement;
+
+    // Embed matching responsive emblem decal into SVG export
+    const activeBadgeValue = getBadgeSymbol(config.centerIcon, config.centerText);
+    if (config.centerIcon !== 'none' && activeBadgeValue) {
+      const viewBox = clone.viewBox?.baseVal;
+      const svgWidth = viewBox && viewBox.width > 0 ? viewBox.width : parseFloat(clone.getAttribute('width') || '220');
+      const svgHeight = viewBox && viewBox.height > 0 ? viewBox.height : parseFloat(clone.getAttribute('height') || '220');
+
+      const badgeSize = Math.min(svgWidth * 0.22, 48);
+      const bx = (svgWidth - badgeSize) / 2;
+      const by = (svgHeight - badgeSize) / 2;
+      const rx = 10;
+
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', String(bx));
+      rect.setAttribute('y', String(by));
+      rect.setAttribute('width', String(badgeSize));
+      rect.setAttribute('height', String(badgeSize));
+      rect.setAttribute('rx', String(rx));
+      rect.setAttribute('fill', config.color);
+      rect.setAttribute('stroke', '#ffffff');
+      rect.setAttribute('stroke-width', '2.5');
+      clone.appendChild(rect);
+
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('x', String(bx + badgeSize / 2));
+      text.setAttribute('y', String(by + badgeSize / 2 + 1));
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('dominant-baseline', 'middle');
+      text.setAttribute('fill', '#ffffff');
+      const fontSize = Math.min(16, (badgeSize / Math.max(1, activeBadgeValue.length)) * 1.4);
+      text.setAttribute('font-size', String(fontSize));
+      text.setAttribute('font-weight', 'bold');
+      text.setAttribute('font-family', "'Plus Jakarta Sans', sans-serif");
+      text.textContent = activeBadgeValue;
+      clone.appendChild(text);
+    }
+
+    const svgString = new XMLSerializer().serializeToString(clone);
     const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const downloadLink = document.createElement('a');
@@ -311,9 +381,6 @@ const App: React.FC = () => {
     downloadLink.click();
     document.body.removeChild(downloadLink);
     URL.revokeObjectURL(url);
-
-    const updated = logExportOrShare('svg');
-    setAnalytics(updated);
   };
 
   const copyImage = async () => {
@@ -353,9 +420,6 @@ const App: React.FC = () => {
     navigator.clipboard.writeText(link);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
-
-    const updated = logExportOrShare('share');
-    setAnalytics(updated);
   };
 
   const copyDestinationUrl = () => {
@@ -585,41 +649,12 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Section 2: Curated Style Themes */}
-            <div className="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200/80 shadow-xs space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
-                    <Sparkles className="w-4 h-4" strokeWidth={2} />
-                  </div>
-                  <h2 className="text-sm font-bold text-slate-900 tracking-tight">Curated Themes</h2>
-                </div>
-                <span className="text-[11px] font-medium text-slate-400">Quick Styles</span>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-2.5">
-                {[
-                  { id: 'cobalt', label: 'Cobalt Pro', icon: <Globe className="w-4 h-4" /> },
-                  { id: 'minimal', label: 'Monochrome', icon: <Layers className="w-4 h-4" /> },
-                  { id: 'restaurant', label: 'Menu Dine', icon: <Utensils className="w-4 h-4" /> },
-                  { id: 'wifi', label: 'Wi-Fi Sign', icon: <Wifi className="w-4 h-4" /> },
-                  { id: 'crimson', label: 'Promotion', icon: <Sparkles className="w-4 h-4" /> },
-                ].map((preset) => (
-                  <button
-                    key={preset.id}
-                    onClick={() => applyPreset(preset.id)}
-                    className={`flex flex-col items-center justify-center p-2.5 sm:p-3 rounded-xl border text-xs font-semibold transition gap-1.5 min-h-[48px] active:scale-97 ${
-                      activePreset === preset.id
-                        ? 'border-slate-900 bg-slate-900 text-white shadow-xs'
-                        : 'border-slate-200 bg-slate-50/60 hover:bg-slate-100 text-slate-700'
-                    }`}
-                  >
-                    <span className="opacity-90">{preset.icon}</span>
-                    <span className="text-[11px] tracking-tight">{preset.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
+            {/* Section 2: Occasion & Border Themes (3D & Animated) */}
+            <BorderThemeSelector
+              config={config}
+              onSelectTheme={handleSelectBorderTheme}
+              onUpdateConfig={(patch) => setConfig((prev) => ({ ...prev, ...patch }))}
+            />
 
             {/* Section 3: Palette & Frame Customization */}
             <div className="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200/80 shadow-xs space-y-4 sm:space-y-5">
@@ -791,59 +826,13 @@ const App: React.FC = () => {
                 </span>
               </div>
 
-              {/* Poster Frame Card */}
-              <div
-                className="w-full max-w-sm rounded-3xl p-4 sm:p-5 shadow-lg flex flex-col items-center text-center transition-colors duration-300 mx-auto"
-                style={{ backgroundColor: config.color }}
-              >
-                {/* Inner White QR Card */}
-                <div
-                  className="w-full bg-white rounded-2xl p-4 sm:p-6 flex flex-col items-center justify-center relative shadow-sm"
-                  style={{ backgroundColor: config.bgColor }}
-                >
-                  {config.content.trim() ? (
-                    <div className="relative flex items-center justify-center max-w-full">
-                      <QRCodeSVG
-                        ref={qrRef}
-                        value={config.content}
-                        size={220}
-                        fgColor={config.color}
-                        bgColor={config.bgColor}
-                        level="H"
-                        marginSize={config.margin}
-                        className="rounded-lg max-w-full h-auto"
-                      />
-
-                      {/* Center Overlay Decal */}
-                      {config.centerIcon !== 'none' && activeBadge && (
-                        <div
-                          className="absolute inset-0 m-auto w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center text-white font-bold text-xs sm:text-sm shadow-md border-2 border-white pointer-events-none"
-                          style={{ backgroundColor: config.color }}
-                        >
-                          {activeBadge}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="w-48 h-48 sm:w-56 sm:h-56 flex flex-col items-center justify-center text-slate-300 text-xs font-medium border-2 border-dashed border-slate-200 rounded-xl">
-                      <QrCode className="w-10 h-10 mb-2 opacity-40" />
-                      Enter target destination URL
-                    </div>
-                  )}
-                </div>
-
-                {/* Poster Title Caption */}
-                {config.title.trim() && (
-                  <div className="mt-3.5 sm:mt-4 px-2 w-full">
-                    <h3 className="text-white font-bold text-sm leading-snug tracking-wide truncate">
-                      {config.title}
-                    </h3>
-                    <p className="text-white/75 text-[11px] font-medium tracking-tight mt-0.5">
-                      A venture by Meena Technologies
-                    </p>
-                  </div>
-                )}
-              </div>
+              {/* Interactive Themed 3D QR Poster Preview */}
+              <ThemedQRPoster
+                config={config}
+                activeBadge={activeBadge}
+                qrRef={qrRef}
+                onToggle3D={() => setConfig((prev) => ({ ...prev, enable3DTilt: !prev.enable3DTilt }))}
+              />
 
               {/* Action Buttons Below Card */}
               <div className="w-full max-w-sm mt-4 grid grid-cols-3 gap-2">
