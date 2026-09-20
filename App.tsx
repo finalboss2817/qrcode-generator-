@@ -25,6 +25,16 @@ import {
   CheckCircle2,
   Eye,
   SlidersHorizontal,
+  FileText,
+  Upload,
+  AlertCircle,
+  Trash2,
+  User as UserIcon,
+  LogIn,
+  LogOut,
+  Zap,
+  UserPlus,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   PREDEFINED_COLORS,
@@ -36,24 +46,35 @@ import { getBorderThemeById } from './borderThemes';
 import { ThemedQRPoster } from './components/ThemedQRPoster';
 import { BorderThemeSelector } from './components/BorderThemeSelector';
 import { drawThemeDecorationsOnCanvas } from './borderCanvasRenderer';
+import { supabase, PDF_STORAGE_BUCKET } from './supabase';
+import { AuthModal } from './components/AuthModal';
+import { User } from '@supabase/supabase-js';
+
+const INITIAL_CONFIG: QRConfig = {
+  content: '',
+  title: '',
+  centerText: '',
+  centerIcon: 'none',
+  color: '#1d4ed8',
+  bgColor: '#ffffff',
+  size: 512,
+  margin: 3,
+  exportScale: 2,
+  borderTheme: 'birthday',
+  enable3DTilt: true,
+  enableAnimations: true,
+  frameBannerText: '',
+};
 
 const App: React.FC = () => {
-  // Core QR parameters
-  const [config, setConfig] = useState<QRConfig>({
-    content: 'https://meenatechnologies.com',
-    title: 'Scan to Connect with Us',
-    centerText: '',
-    centerIcon: 'none',
-    color: '#1d4ed8',
-    bgColor: '#ffffff',
-    size: 512,
-    margin: 3,
-    exportScale: 2,
-    borderTheme: 'birthday',
-    enable3DTilt: true,
-    enableAnimations: true,
-    frameBannerText: '🎉 CELEBRATE WITH US 🎉',
-  });
+  // Input mode: URL / Text vs PDF Document
+  const [inputMode, setInputMode] = useState<'text' | 'pdf'>('text');
+  const [pdfUploading, setPdfUploading] = useState<boolean>(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Core QR parameters - Start with empty values (no pre-filled text or placeholders)
+  const [config, setConfig] = useState<QRConfig>(INITIAL_CONFIG);
 
   const [activePreset, setActivePreset] = useState<string>('');
   const [activeMobileTab, setActiveMobileTab] = useState<'editor' | 'preview'>('editor');
@@ -64,7 +85,41 @@ const App: React.FC = () => {
   const [isShareModalOpen, setIsShareModalOpen] = useState<boolean>(false);
   const [isSharingNative, setIsSharingNative] = useState<boolean>(false);
 
+  // Supabase Auth and Pro Access States
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [authReason, setAuthReason] = useState<string>('');
+  const [pdfUploadSuccess, setPdfUploadSuccess] = useState<boolean>(false);
+
   const qrRef = useRef<SVGSVGElement>(null);
+
+  // Listen to Supabase Auth state changes
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setCurrentUser(session?.user ?? null);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      const user = session?.user ?? null;
+      setCurrentUser(user);
+      if (event === 'SIGNED_OUT' || !user) {
+        setInputMode('text');
+        setPdfUploading(false);
+        setPdfError(null);
+        setPdfUploadSuccess(false);
+        setConfig((prev) => {
+          if (prev.pdfFileName || prev.uploadedPdfUrl) {
+            return { ...INITIAL_CONFIG };
+          }
+          return prev;
+        });
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   // Restore configuration from URL hash if shared
   useEffect(() => {
@@ -75,6 +130,9 @@ const App: React.FC = () => {
         const decoded = JSON.parse(decodeURIComponent(escape(atob(encoded))));
         if (decoded && decoded.content) {
           setConfig(decoded);
+          if (decoded.pdfFileName) {
+            setInputMode('pdf');
+          }
         }
       }
     } catch (e) {
@@ -95,6 +153,143 @@ const App: React.FC = () => {
           ? value.slice(0, 5)
           : value,
     }));
+  };
+
+  // PDF File Handler - With Supabase Cloud Storage Upload for instant QR generation
+  const handlePdfUpload = async (file: File) => {
+    setPdfError(null);
+    setPdfUploadSuccess(false);
+    if (!file) return;
+
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      setPdfError('Please select a valid PDF file (.pdf format only).');
+      return;
+    }
+
+    // Limit to 25MB for cloud documents
+    if (file.size > 25 * 1024 * 1024) {
+      setPdfError('File size exceeds 25MB limit. Please upload a smaller document.');
+      return;
+    }
+
+    const formattedSize =
+      file.size > 1024 * 1024
+        ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
+        : `${Math.round(file.size / 1024)} KB`;
+
+    const cleanTitle = file.name.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ');
+
+    // If user is not logged in, prompt sign up for cloud PDF hosting & dynamic features
+    if (!currentUser) {
+      setConfig((prev) => ({
+        ...prev,
+        title: prev.title || cleanTitle,
+        pdfFileName: file.name,
+        pdfFileSize: formattedSize,
+      }));
+      setAuthReason('Sign up for a free account to upload your PDF to cloud storage and generate the live scannable QR code automatically.');
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    // Authenticated: Upload to Supabase Storage Bucket
+    try {
+      setPdfUploading(true);
+      const fileExt = 'pdf';
+      const cleanFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const uniquePath = `${currentUser.id}/${Date.now()}_${cleanFileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(PDF_STORAGE_BUCKET)
+        .upload(uniquePath, file, {
+          cacheControl: '3600',
+          upsert: true,
+          contentType: 'application/pdf',
+        });
+
+      if (uploadError) {
+        // If the bucket does not exist yet or requires public read, inform user with graceful fallback
+        console.warn('Supabase storage upload notice:', uploadError);
+        throw uploadError;
+      }
+
+      // Retrieve public URL from Supabase
+      const { data: publicUrlData } = supabase.storage
+        .from(PDF_STORAGE_BUCKET)
+        .getPublicUrl(uniquePath);
+
+      const generatedDocUrl = publicUrlData.publicUrl;
+
+      setConfig((prev) => ({
+        ...prev,
+        content: generatedDocUrl,
+        uploadedPdfUrl: generatedDocUrl,
+        title: prev.title || cleanTitle,
+        pdfFileName: file.name,
+        pdfFileSize: formattedSize,
+        isDynamic: true,
+      }));
+      setPdfUploadSuccess(true);
+    } catch (err: any) {
+      console.error('Supabase PDF upload error:', err);
+      // Helpful troubleshooting guidance
+      const message = err.message || 'Failed to upload PDF document.';
+      if (message.includes('bucket') || message.includes('not found') || message.includes('row-level security')) {
+        setPdfError(
+          'Document storage notice: Please ensure your cloud storage is initialized or paste your document link in the box below.'
+        );
+      } else {
+        setPdfError(message);
+      }
+    } finally {
+      setPdfUploading(false);
+    }
+  };
+
+  const handlePdfFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handlePdfUpload(file);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.warn('Sign out notice:', e);
+    }
+    // Fully reset user and session states to guarantee complete isolation between Pro and Free mode
+    setCurrentUser(null);
+    setInputMode('text');
+    setPdfUploading(false);
+    setPdfError(null);
+    setPdfUploadSuccess(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    // If current configuration was tied to an uploaded Pro PDF document, reset to fresh initial config
+    setConfig((prev) => {
+      if (prev.pdfFileName || prev.uploadedPdfUrl) {
+        return {
+          ...INITIAL_CONFIG,
+        };
+      }
+      return prev;
+    });
+  };
+
+  const clearPdf = () => {
+    setConfig((prev) => ({
+      ...prev,
+      pdfFileName: undefined,
+      pdfFileSize: undefined,
+      content: prev.content.startsWith('data:') ? '' : prev.content,
+    }));
+    setPdfError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   const getBadgeSymbol = (iconVal: string, fallbackText: string): string => {
@@ -193,7 +388,7 @@ const App: React.FC = () => {
       color: theme.defaultColor,
       bgColor: theme.defaultBg,
       centerIcon: theme.defaultCenterIcon,
-      title: prev.title || theme.defaultTitle,
+      title: prev.title,
       frameBannerText: theme.bannerText,
     }));
   };
@@ -489,31 +684,83 @@ const App: React.FC = () => {
       <header className="w-full bg-white border-b border-slate-200/80 sticky top-0 z-30 shadow-xs">
         <div className="max-w-6xl mx-auto px-3 sm:px-6 lg:px-8 h-16 sm:h-20 flex items-center justify-between gap-2 sm:gap-4">
           {/* Logo & Venture Badge */}
-          <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3.5 min-w-0">
             <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-slate-900 text-white flex items-center justify-center shadow-xs shrink-0">
               <QrCode className="w-5 h-5 sm:w-6 sm:h-6 text-white" strokeWidth={2} />
             </div>
             <div className="flex flex-col min-w-0">
-              <h1 className="text-base sm:text-lg font-bold tracking-tight text-slate-900 truncate">
+              <h1 className="text-sm sm:text-lg font-bold tracking-tight text-slate-900 truncate">
                 QR Code Generator
               </h1>
-              <div className="flex items-center gap-1 text-[11px] sm:text-xs text-slate-500 font-medium truncate">
+              <div className="flex items-center gap-1 text-[10px] sm:text-xs text-slate-500 font-medium truncate">
                 <Building2 className="w-3 h-3 text-indigo-600 shrink-0" />
-                <span className="truncate">A venture by <strong className="text-slate-700 font-semibold">Meena Technologies</strong></span>
+                <span className="truncate">Meena Technologies</span>
               </div>
             </div>
           </div>
 
-          {/* Header Action Tools */}
+          {/* Header Action Tools & Prominent Sign-Up Access */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {currentUser ? (
+              <div className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200/70 border border-slate-200 rounded-xl px-2 sm:px-2.5 py-1.5 transition">
+                <div className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                  {currentUser.email?.[0]?.toUpperCase() || 'U'}
+                </div>
+                <div className="hidden sm:flex flex-col text-left">
+                  <span className="text-[11px] font-bold text-slate-800 truncate max-w-[110px]">
+                    {currentUser.email?.split('@')[0]}
+                  </span>
+                  <span className="text-[9px] font-semibold text-indigo-600 uppercase flex items-center gap-0.5">
+                    <Zap className="w-2.5 h-2.5" /> Pro Tier
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  title="Sign out"
+                  className="p-1 text-slate-400 hover:text-rose-600 rounded transition ml-0.5 sm:ml-1"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 sm:gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthReason('Sign in to your account to manage your dynamic QR codes and uploaded PDF files.');
+                    setIsAuthModalOpen(true);
+                  }}
+                  className="hidden md:inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl text-slate-700 hover:text-slate-900 hover:bg-slate-100 font-semibold text-xs transition min-h-[38px] sm:min-h-[42px]"
+                  id="header-login-btn"
+                >
+                  <LogIn className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Log In</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthReason('Create a free account to upload PDF documents and create editable QR codes.');
+                    setIsAuthModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white font-bold text-xs transition shadow-sm active:scale-95 min-h-[38px] sm:min-h-[42px]"
+                  id="header-signup-btn"
+                >
+                  <UserPlus className="w-3.5 h-3.5 text-indigo-200 shrink-0" />
+                  <span className="hidden xs:inline">Sign Up Free</span>
+                  <span className="inline xs:hidden">Sign Up</span>
+                </button>
+              </div>
+            )}
+
             <button
               onClick={() => setIsShareModalOpen(true)}
               disabled={!config.content.trim()}
-              className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 font-semibold text-xs tracking-wide transition shadow-xs active:scale-95 disabled:opacity-40 min-h-[40px] sm:min-h-[42px]"
+              className="inline-flex items-center gap-1.5 sm:gap-2 p-2 sm:px-3.5 sm:py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 font-semibold text-xs tracking-wide transition shadow-xs active:scale-95 disabled:opacity-40 min-h-[38px] sm:min-h-[42px]"
               id="header-share-btn"
               title="Share QR Code"
             >
-              <Share2 className="w-4 h-4 text-indigo-600" strokeWidth={2} />
+              <Share2 className="w-4 h-4 text-indigo-600 shrink-0" strokeWidth={2} />
               <span className="hidden sm:inline">Share</span>
             </button>
 
@@ -546,14 +793,13 @@ const App: React.FC = () => {
             <button
               onClick={downloadPNG}
               disabled={isDownloading || !config.content.trim()}
-              className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs tracking-wide transition shadow-sm active:scale-95 disabled:opacity-40 min-h-[40px] sm:min-h-[42px]"
+              className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs tracking-wide transition shadow-sm active:scale-95 disabled:opacity-40 min-h-[38px] sm:min-h-[42px]"
               id="header-png-btn"
               title="Download PNG Image"
             >
-              <Download className="w-4 h-4 text-white" strokeWidth={2} />
-              <span className="hidden xs:inline sm:inline">Download</span>
-              <span className="inline xs:hidden sm:hidden">PNG</span>
-              <span className="hidden sm:inline">PNG</span>
+              <Download className="w-4 h-4 text-white shrink-0" strokeWidth={2} />
+              <span className="hidden sm:inline">Download PNG</span>
+              <span className="inline sm:hidden">PNG</span>
             </button>
           </div>
         </div>
@@ -589,6 +835,48 @@ const App: React.FC = () => {
         </div>
       </div>
 
+      {/* Free vs Pro Distinct Tier Banner */}
+      <div className="w-full max-w-6xl mx-auto px-3 sm:px-6 lg:px-8 pt-3 sm:pt-6">
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-3.5 sm:p-5 text-white shadow-md border border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-3.5 sm:gap-4">
+          <div className="flex items-start gap-2.5 sm:gap-3.5 min-w-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+              <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5 text-indigo-400" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                <span className="font-bold text-xs sm:text-base text-white">Choose Your Plan:</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 whitespace-nowrap">
+                  Free Forever
+                </span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 whitespace-nowrap">
+                  Pro Cloud
+                </span>
+              </div>
+              <p className="text-[11px] sm:text-xs text-slate-300 mt-1 leading-relaxed">
+                <strong className="text-emerald-400 font-semibold">Free:</strong> Standard QR (Links, Text, Wi-Fi) + 3D Frames + High-res downloads.
+                <span className="block sm:inline sm:ml-2">
+                  <strong className="text-indigo-300 font-semibold">Pro:</strong> Direct PDF upload & editable link destinations.
+                </span>
+              </p>
+            </div>
+          </div>
+
+          {!currentUser && (
+            <button
+              type="button"
+              onClick={() => {
+                setAuthReason('Sign up for a free account to upload PDF documents and update QR links anytime.');
+                setIsAuthModalOpen(true);
+              }}
+              className="w-full md:w-auto px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-900 font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-sm active:scale-95 shrink-0 min-h-[40px] sm:min-h-[42px]"
+            >
+              <UserPlus className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+              <span>Unlock Pro Features Free</span>
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Main Workspace Container */}
       <main className="w-full max-w-6xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8 flex-1">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
@@ -596,39 +884,276 @@ const App: React.FC = () => {
           {/* Left Form: Configurator */}
           <div className={`lg:col-span-7 space-y-5 sm:space-y-6 ${activeMobileTab === 'editor' ? 'block' : 'hidden lg:block'}`}>
             
-            {/* Section 1: Target Destination & Title */}
-            <div className="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200/80 shadow-xs space-y-4 sm:space-y-5">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
-                    <Link2 className="w-4 h-4" strokeWidth={2} />
+            {/* Section 1: Content & Document Source */}
+            <div className="bg-white rounded-2xl p-3.5 sm:p-6 border border-slate-200/90 shadow-sm space-y-3.5 sm:space-y-5">
+              <div className="flex items-center justify-between pb-3 sm:pb-3.5 border-b border-slate-100">
+                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                  <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white flex items-center justify-center font-black text-xs sm:text-sm shadow-sm ring-2 sm:ring-4 ring-indigo-50 shrink-0">
+                    1
                   </div>
-                  <h2 className="text-sm font-bold text-slate-900 tracking-tight">Content & Header</h2>
-                </div>
-                <span className="text-[11px] font-medium text-slate-400">Step 1</span>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5" htmlFor="content">
-                  Target Destination (URL or Text)
-                </label>
-                <div className="relative">
-                  <input
-                    id="content"
-                    name="content"
-                    type="text"
-                    value={config.content}
-                    onChange={handleInputChange}
-                    className="w-full pl-3.5 pr-10 py-3 sm:py-2.5 text-base sm:text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900 outline-none transition font-mono text-slate-800 min-h-[44px]"
-                    placeholder="https://yourwebsite.com"
-                  />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
-                    <Globe className="w-4 h-4" />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 sm:gap-2">
+                      <h2 className="text-sm sm:text-lg font-bold text-slate-900 tracking-tight truncate">
+                        Destination Content & Source
+                      </h2>
+                      <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                        Step 1
+                      </span>
+                    </div>
+                    <p className="text-[11px] sm:text-xs text-slate-500 font-medium mt-0.5 line-clamp-1 sm:line-clamp-none">
+                      Choose between standard website/text links or upload a PDF document.
+                    </p>
                   </div>
                 </div>
               </div>
 
-              <div>
+              {/* Source Mode Toggle: Web URL / Text vs PDF File */}
+              <div className="flex p-1 bg-slate-100 rounded-xl gap-1">
+                <button
+                  type="button"
+                  onClick={() => setInputMode('text')}
+                  className={`flex-1 py-2 px-2 sm:px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 sm:gap-2 transition min-h-[42px] ${
+                    inputMode === 'text'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-indigo-600 shrink-0" />
+                  <span className="truncate">Web / Text</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInputMode('pdf')}
+                  className={`flex-1 py-2 px-2 sm:px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 sm:gap-2 transition min-h-[42px] ${
+                    inputMode === 'pdf'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-600 shrink-0" />
+                  <span className="truncate">PDF File</span>
+                  <span className="text-[9px] sm:text-[10px] uppercase font-bold px-1.5 py-0.2 rounded bg-indigo-100 text-indigo-700 shrink-0">
+                    Pro
+                  </span>
+                  {config.pdfFileName && (
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                  )}
+                </button>
+              </div>
+
+              {/* URL or Text Mode */}
+              {inputMode === 'text' && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5" htmlFor="content">
+                      Destination URL or Text
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="content"
+                        name="content"
+                        type="text"
+                        value={config.pdfFileName ? '' : config.content}
+                        onChange={(e) => {
+                          if (config.pdfFileName) {
+                            setConfig((prev) => ({
+                              ...prev,
+                              content: e.target.value,
+                              pdfFileName: undefined,
+                              pdfFileSize: undefined,
+                            }));
+                          } else {
+                            handleInputChange(e);
+                          }
+                        }}
+                        className="w-full pl-3.5 pr-10 py-3 sm:py-2.5 text-base sm:text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900 outline-none transition font-mono text-slate-800 min-h-[44px]"
+                      />
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                        <Link2 className="w-4 h-4" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* PDF Document Mode */}
+              {inputMode === 'pdf' && (
+                <div className="space-y-4">
+                  {/* Pro Feature Highlights */}
+                  <div className="p-3.5 bg-gradient-to-r from-indigo-50/90 to-blue-50/80 rounded-xl border border-indigo-100 flex items-start justify-between gap-3 text-xs">
+                    <div className="flex items-start gap-2.5">
+                      <Sparkles className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-semibold text-slate-900 flex items-center gap-1.5">
+                          <span>Direct PDF-to-QR Cloud Hosting</span>
+                          <span className="text-[10px] uppercase font-bold px-1.5 py-0.2 rounded bg-indigo-600 text-white">
+                            Pro
+                          </span>
+                        </p>
+                        <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                          {currentUser
+                            ? 'Drop your PDF file below. It is stored securely in the cloud and connected directly to your QR code.'
+                            : 'Upload a PDF to instantly generate a scannable QR code. Free sign-up is required to securely store your files.'}
+                        </p>
+                      </div>
+                    </div>
+                    {!currentUser && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthReason('Sign up for free to upload PDF documents and create editable QR codes.');
+                          setIsAuthModalOpen(true);
+                        }}
+                        className="shrink-0 px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-xs transition"
+                      >
+                        Sign Up Free
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Direct Cloud Upload Box */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        Upload PDF Document
+                      </label>
+                      <span className="text-[11px] text-slate-400">PDF up to 25MB</span>
+                    </div>
+
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      onChange={handlePdfFileSelect}
+                      className="hidden"
+                      id="pdf-upload-input"
+                    />
+
+                    {config.pdfFileName ? (
+                      <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/60 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                            <FileText className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-slate-900 truncate">
+                              {config.pdfFileName}
+                            </p>
+                            <p className="text-[11px] text-slate-500 font-medium flex items-center gap-1.5">
+                              <span>PDF Document • {config.pdfFileSize || 'Ready'}</span>
+                              {pdfUploadSuccess && (
+                                <span className="text-emerald-700 font-semibold flex items-center gap-0.5">
+                                  <Check className="w-3 h-3" /> Connected & Ready
+                                </span>
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={pdfUploading}
+                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition"
+                          >
+                            Replace
+                          </button>
+                          <button
+                            type="button"
+                            onClick={clearPdf}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                            title="Remove PDF reference"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        onClick={() => {
+                          if (!currentUser) {
+                            setAuthReason('Create a free account to upload PDF documents and create editable QR codes.');
+                            setIsAuthModalOpen(true);
+                          } else {
+                            fileInputRef.current?.click();
+                          }
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const file = e.dataTransfer.files?.[0];
+                          if (file) handlePdfUpload(file);
+                        }}
+                        className={`border-2 border-dashed ${
+                          currentUser
+                            ? 'border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50/20'
+                            : 'border-slate-300 hover:border-indigo-300 bg-slate-50/50'
+                        } rounded-xl p-5 flex flex-col items-center justify-center cursor-pointer transition text-center group min-h-[110px]`}
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-white shadow-xs group-hover:scale-105 text-indigo-600 flex items-center justify-center transition mb-2 border border-slate-100">
+                          {pdfUploading ? (
+                            <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <Upload className="w-5 h-5" />
+                          )}
+                        </div>
+                        <span className="text-xs font-bold text-slate-800">
+                          {pdfUploading
+                            ? 'Uploading document...'
+                            : currentUser
+                            ? 'Click or drag PDF here to upload & link'
+                            : 'Sign up / Log in to upload your PDF directly'}
+                        </span>
+                        <span className="text-[11px] text-slate-400 mt-0.5">
+                          {currentUser
+                            ? 'Creates an instant scannable link for your document'
+                            : 'Free account • Stores files securely online'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {pdfError && (
+                    <div className="flex items-center gap-2 text-xs text-rose-600 bg-rose-50 p-2.5 rounded-xl border border-rose-100">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{pdfError}</span>
+                    </div>
+                  )}
+
+                  {/* Or enter external link */}
+                  <div className="pt-2 border-t border-slate-100">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5" htmlFor="pdf-link-url">
+                      Or link an existing document URL <span className="text-slate-400 font-normal">(Google Drive, Dropbox, website)</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="pdf-link-url"
+                        name="content"
+                        type="url"
+                        placeholder="https://drive.google.com/file/d/... or https://example.com/menu.pdf"
+                        value={config.content.startsWith('data:') ? '' : config.content}
+                        onChange={(e) => {
+                          setConfig((prev) => ({
+                            ...prev,
+                            content: e.target.value,
+                          }));
+                        }}
+                        className="w-full pl-3.5 pr-10 py-3 sm:py-2.5 text-base sm:text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition font-mono text-slate-800 min-h-[44px]"
+                      />
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                        <Link2 className="w-4 h-4" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Poster Title Caption (Step 1 Part B) */}
+              <div className="pt-2 border-t border-slate-100">
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5" htmlFor="title">
                   Poster Label Caption <span className="text-slate-400 font-normal">(Optional bottom label)</span>
                 </label>
@@ -640,7 +1165,6 @@ const App: React.FC = () => {
                     value={config.title}
                     onChange={handleInputChange}
                     className="w-full pl-3.5 pr-10 py-3 sm:py-2.5 text-base sm:text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900 outline-none transition text-slate-800 font-medium min-h-[44px]"
-                    placeholder="e.g. Scan to Connect with Us"
                   />
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
                     <Type className="w-4 h-4" />
@@ -656,16 +1180,30 @@ const App: React.FC = () => {
               onUpdateConfig={(patch) => setConfig((prev) => ({ ...prev, ...patch }))}
             />
 
-            {/* Section 3: Palette & Frame Customization */}
-            <div className="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200/80 shadow-xs space-y-4 sm:space-y-5">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
-                    <Palette className="w-4 h-4" strokeWidth={2} />
+            {/* Section 3: Palette & Color Styling */}
+            <div className="bg-white rounded-2xl p-3.5 sm:p-6 border border-slate-200/90 shadow-sm space-y-3.5 sm:space-y-5">
+              <div className="flex items-center justify-between pb-3 sm:pb-3.5 border-b border-slate-100">
+                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                  <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white flex items-center justify-center font-black text-xs sm:text-sm shadow-sm ring-2 sm:ring-4 ring-amber-50 shrink-0">
+                    3
                   </div>
-                  <h2 className="text-sm font-bold text-slate-900 tracking-tight">Color Palette</h2>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 sm:gap-2">
+                      <h2 className="text-sm sm:text-lg font-bold text-slate-900 tracking-tight truncate">
+                        Color Palette & Styling
+                      </h2>
+                      <span className="hidden xs:inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                        Step 3
+                      </span>
+                    </div>
+                    <p className="text-[11px] sm:text-xs text-slate-500 font-medium mt-0.5 line-clamp-1 sm:line-clamp-none">
+                      Select high-contrast colors to ensure sharp scanning and brand consistency.
+                    </p>
+                  </div>
                 </div>
-                <span className="text-[11px] font-mono text-slate-500 uppercase">{config.color}</span>
+                <span className="text-[10px] sm:text-[11px] font-mono text-slate-700 uppercase font-bold bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md shrink-0">
+                  {config.color}
+                </span>
               </div>
 
               <div className="flex flex-wrap gap-2.5 sm:gap-3 items-center">
@@ -705,18 +1243,29 @@ const App: React.FC = () => {
             </div>
 
             {/* Section 4: Center Emblem & Decal */}
-            <div className="bg-white rounded-2xl p-4 sm:p-6 border border-slate-200/80 shadow-xs space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
-                    <Sliders className="w-4 h-4" strokeWidth={2} />
+            <div className="bg-white rounded-2xl p-3.5 sm:p-6 border border-slate-200/90 shadow-sm space-y-3.5 sm:space-y-4">
+              <div className="flex items-center justify-between pb-3 sm:pb-3.5 border-b border-slate-100">
+                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                  <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center font-black text-xs sm:text-sm shadow-sm ring-2 sm:ring-4 ring-emerald-50 shrink-0">
+                    4
                   </div>
-                  <h2 className="text-sm font-bold text-slate-900 tracking-tight">Center Badge & Quality</h2>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 sm:gap-2">
+                      <h2 className="text-sm sm:text-lg font-bold text-slate-900 tracking-tight truncate">
+                        Center Emblem & Badge
+                      </h2>
+                      <span className="hidden xs:inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                        Step 4
+                      </span>
+                    </div>
+                    <p className="text-[11px] sm:text-xs text-slate-500 font-medium mt-0.5 line-clamp-1 sm:line-clamp-none">
+                      Overlay an icon, logo symbol, or custom monogram badge in the center.
+                    </p>
+                  </div>
                 </div>
-                <span className="text-[11px] font-medium text-slate-400">Decal & Margin</span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1.5" htmlFor="centerIcon">
                     Center Emblem Symbol
@@ -726,7 +1275,7 @@ const App: React.FC = () => {
                     name="centerIcon"
                     value={config.centerIcon}
                     onChange={handleInputChange}
-                    className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 outline-none transition text-slate-700 font-medium min-h-[44px]"
+                    className="w-full px-3.5 py-2.5 text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 outline-none transition text-slate-700 font-medium min-h-[44px]"
                   >
                     {ICON_OPTIONS.map((opt) => (
                       <option key={opt.id} value={opt.id}>
@@ -748,8 +1297,7 @@ const App: React.FC = () => {
                       maxLength={5}
                       value={config.centerText}
                       onChange={handleInputChange}
-                      className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 outline-none transition font-mono uppercase text-slate-800 min-h-[44px]"
-                      placeholder="e.g. VIP, APP"
+                      className="w-full px-3.5 py-2.5 text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 outline-none transition font-mono uppercase text-slate-800 min-h-[44px]"
                     />
                   </div>
                 ) : (
@@ -762,7 +1310,7 @@ const App: React.FC = () => {
                       name="margin"
                       value={config.margin}
                       onChange={handleInputChange}
-                      className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 outline-none transition text-slate-700 font-medium min-h-[44px]"
+                      className="w-full px-3.5 py-2.5 text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 outline-none transition text-slate-700 font-medium min-h-[44px]"
                     >
                       <option value={1}>Compact (1 border unit)</option>
                       <option value={2}>Standard (2 border units)</option>
@@ -772,8 +1320,32 @@ const App: React.FC = () => {
                   </div>
                 )}
               </div>
+            </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+            {/* Section 5: Export Settings & Precision */}
+            <div className="bg-white rounded-2xl p-3.5 sm:p-6 border border-slate-200/90 shadow-sm space-y-3.5 sm:space-y-4">
+              <div className="flex items-center justify-between pb-3 sm:pb-3.5 border-b border-slate-100">
+                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                  <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-violet-600 to-indigo-700 text-white flex items-center justify-center font-black text-xs sm:text-sm shadow-sm ring-2 sm:ring-4 ring-violet-50 shrink-0">
+                    5
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 sm:gap-2">
+                      <h2 className="text-sm sm:text-lg font-bold text-slate-900 tracking-tight truncate">
+                        Export Resolution & Precision
+                      </h2>
+                      <span className="hidden xs:inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                        Step 5
+                      </span>
+                    </div>
+                    <p className="text-[11px] sm:text-xs text-slate-500 font-medium mt-0.5 line-clamp-1 sm:line-clamp-none">
+                      Configure output scale for sharp screens, Retina displays, or print production.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1.5" htmlFor="exportScale">
                     Export Resolution
@@ -783,7 +1355,7 @@ const App: React.FC = () => {
                     name="exportScale"
                     value={config.exportScale}
                     onChange={handleInputChange}
-                    className="w-full px-3.5 py-3 sm:py-2.5 text-base sm:text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 outline-none transition text-slate-700 font-medium min-h-[44px]"
+                    className="w-full px-3.5 py-2.5 text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 outline-none transition text-slate-700 font-medium min-h-[44px]"
                   >
                     <option value={1}>1x — Web Display (~700px)</option>
                     <option value={2}>2x — High-DPI Retina (~1400px)</option>
@@ -818,10 +1390,22 @@ const App: React.FC = () => {
             <div className="sticky top-24 w-full flex flex-col items-center">
               
               <div className="w-full flex items-center justify-between mb-3 px-1">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                  Live Poster Preview
-                </span>
-                <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <Eye className="w-3.5 h-3.5 text-indigo-600" />
+                    Live Poster Preview
+                  </span>
+                  {config.pdfFileName ? (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 uppercase">
+                      Pro PDF Document
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 uppercase">
+                      Standard QR
+                    </span>
+                  )}
+                </div>
+                <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
                   {config.exportScale}x Scale
                 </span>
               </div>
@@ -835,45 +1419,45 @@ const App: React.FC = () => {
               />
 
               {/* Action Buttons Below Card */}
-              <div className="w-full max-w-sm mt-4 grid grid-cols-3 gap-2">
+              <div className="w-full max-w-[340px] sm:max-w-sm mt-4 grid grid-cols-3 gap-2">
                 <button
                   onClick={() => setIsShareModalOpen(true)}
                   disabled={!config.content.trim()}
-                  className="py-3 px-3 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 font-semibold rounded-xl text-xs transition shadow-xs active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50 min-h-[44px]"
+                  className="py-3 px-2 sm:px-3 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 font-semibold rounded-xl text-xs transition shadow-xs active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50 min-h-[44px]"
                   id="preview-share-btn"
                 >
-                  <Share2 className="w-3.5 h-3.5 text-indigo-600" />
+                  <Share2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
                   <span>Share</span>
                 </button>
 
                 <button
                   onClick={downloadPNG}
                   disabled={isDownloading || !config.content.trim()}
-                  className="py-3 px-3 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-xl text-xs transition shadow-sm active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50 min-h-[44px]"
+                  className="py-3 px-2 sm:px-3 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-xl text-xs transition shadow-sm active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50 min-h-[44px]"
                   id="preview-png-btn"
                 >
-                  <Download className="w-3.5 h-3.5" />
+                  <Download className="w-3.5 h-3.5 shrink-0" />
                   <span>PNG</span>
                 </button>
 
                 <button
                   onClick={downloadSVG}
                   disabled={!config.content.trim()}
-                  className="py-3 px-3 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 font-semibold rounded-xl text-xs transition shadow-xs active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50 min-h-[44px]"
+                  className="py-3 px-2 sm:px-3 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 font-semibold rounded-xl text-xs transition shadow-xs active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50 min-h-[44px]"
                   id="preview-svg-btn"
                 >
-                  <FileCode2 className="w-3.5 h-3.5 text-slate-500" />
+                  <FileCode2 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                   <span>SVG</span>
                 </button>
               </div>
 
               {/* Mobile Back to Editor button */}
-              <div className="w-full max-w-sm mt-3 lg:hidden">
+              <div className="w-full max-w-[340px] sm:max-w-sm mt-3 lg:hidden">
                 <button
                   onClick={() => setActiveMobileTab('editor')}
                   className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white text-slate-600 font-semibold text-xs flex items-center justify-center gap-1.5 active:scale-98 transition min-h-[44px]"
                 >
-                  <SlidersHorizontal className="w-3.5 h-3.5 text-slate-500" />
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                   <span>Back to Customize</span>
                 </button>
               </div>
@@ -922,7 +1506,7 @@ const App: React.FC = () => {
               <div className="min-w-0">
                 <h3 className="text-base font-bold text-slate-900 truncate">Share QR Code</h3>
                 <p className="text-xs text-slate-500 font-medium truncate">
-                  A venture by Meena Technologies
+                  Send or copy your generated QR poster
                 </p>
               </div>
             </div>
@@ -939,10 +1523,10 @@ const App: React.FC = () => {
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-bold text-slate-800 truncate">
-                  {config.title || 'QR Code Poster'}
+                  {config.title || (config.pdfFileName ? config.pdfFileName : 'QR Code Poster')}
                 </p>
                 <p className="text-[11px] text-slate-500 truncate font-mono">
-                  {config.content}
+                  {config.pdfFileName ? `PDF Document (${config.pdfFileSize || 'Ready'})` : config.content}
                 </p>
               </div>
             </div>
@@ -1062,6 +1646,16 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Supabase Auth Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onSuccess={() => {
+          setIsAuthModalOpen(false);
+        }}
+        reason={authReason}
+      />
     </div>
   );
 };

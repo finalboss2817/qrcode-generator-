@@ -13,9 +13,48 @@ import {
   Heart,
   Utensils,
   Music,
+  AlertTriangle,
 } from 'lucide-react';
 import { QRConfig } from '../types';
 import { getBorderThemeById } from '../borderThemes';
+
+interface QRErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+interface QRErrorBoundaryState {
+  hasError: boolean;
+}
+
+class QRErrorBoundary extends React.Component<QRErrorBoundaryProps, QRErrorBoundaryState> {
+  constructor(props: QRErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any) {
+    console.warn('QR Code generation overflow caught safely:', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="w-48 h-48 sm:w-52 sm:h-52 flex flex-col items-center justify-center text-amber-700 bg-amber-50/90 rounded-xl p-4 text-center border border-amber-200">
+          <AlertTriangle className="w-8 h-8 mb-2 text-amber-500" />
+          <span className="font-bold text-xs">Content Exceeds QR Limit</span>
+          <span className="text-[11px] text-amber-800 mt-1 leading-tight">
+            QR codes can only store up to ~2KB. Please provide a link/URL instead of raw binary data.
+          </span>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface ThemedQRPosterProps {
   config: QRConfig;
@@ -101,7 +140,7 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
         }}
         whileHover={config.enable3DTilt ? { scale: 1.02 } : undefined}
         transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-        className="w-full max-w-sm rounded-3xl p-5 sm:p-6 shadow-2xl relative transition-all duration-300 mx-auto overflow-hidden group border border-white/20"
+        className="w-full max-w-[340px] sm:max-w-sm rounded-2xl sm:rounded-3xl p-3.5 sm:p-6 shadow-xl sm:shadow-2xl relative transition-all duration-300 mx-auto overflow-hidden group border border-white/20"
       >
         {/* Dynamic Background Base */}
         <div
@@ -302,42 +341,55 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
 
         {/* Inner White QR Card (Raised in 3D Space) */}
         <div
-          className="w-full bg-white rounded-2xl p-4 sm:p-5 flex flex-col items-center justify-center relative shadow-md transition-all duration-300 z-10"
+          className="w-full bg-white rounded-xl sm:rounded-2xl p-3 sm:p-5 flex flex-col items-center justify-center relative shadow-md transition-all duration-300 z-10"
           style={{
             backgroundColor: config.bgColor,
             transform: config.enable3DTilt ? 'translateZ(20px)' : 'none',
           }}
         >
           {config.content.trim() ? (
-            <div className="relative flex items-center justify-center max-w-full">
-              <QRCodeSVG
-                ref={qrRef}
-                value={config.content}
-                size={220}
-                fgColor={config.color}
-                bgColor={config.bgColor}
-                level="H"
-                marginSize={config.margin}
-                className="rounded-lg max-w-full h-auto"
-              />
+            config.content.length > 2000 ? (
+              <div className="w-44 h-44 sm:w-52 sm:h-52 flex flex-col items-center justify-center text-amber-800 bg-amber-50/90 rounded-xl p-3 sm:p-4 text-center border border-amber-200">
+                <AlertTriangle className="w-7 h-7 sm:w-8 sm:h-8 mb-1.5 sm:mb-2 text-amber-600" />
+                <span className="font-bold text-xs">Content Exceeds QR Limit</span>
+                <span className="text-[10px] sm:text-[11px] text-amber-700 mt-1 leading-tight">
+                  QR codes can hold up to ~2,000 characters. For large files or PDFs, please paste the hosted link (Google Drive, Dropbox, or web link).
+                </span>
+              </div>
+            ) : (
+              <div className="relative flex items-center justify-center max-w-full p-1">
+                <QRErrorBoundary>
+                  <QRCodeSVG
+                    ref={qrRef}
+                    value={config.content}
+                    size={200}
+                    fgColor={config.color}
+                    bgColor={config.bgColor}
+                    level="H"
+                    marginSize={config.margin}
+                    className="rounded-lg w-full max-w-[200px] sm:max-w-[220px] h-auto aspect-square"
+                  />
+                </QRErrorBoundary>
 
-              {/* Center Overlay Decal (Elevated in 3D) */}
-              {config.centerIcon !== 'none' && activeBadge && (
-                <div
-                  className="absolute inset-0 m-auto w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center text-white font-bold text-xs sm:text-sm shadow-md border-2 border-white pointer-events-none transition-transform select-none"
-                  style={{
-                    backgroundColor: config.color,
-                    transform: config.enable3DTilt ? 'translateZ(35px)' : 'none',
-                  }}
-                >
-                  <span className="truncate whitespace-nowrap">{activeBadge}</span>
-                </div>
-              )}
-            </div>
+                {/* Center Overlay Decal (Elevated in 3D) */}
+                {config.centerIcon !== 'none' && activeBadge && (
+                  <div
+                    className="absolute inset-0 m-auto w-9 h-9 sm:w-11 sm:h-11 rounded-lg sm:rounded-xl flex items-center justify-center text-white font-bold text-xs sm:text-sm shadow-md border-2 border-white pointer-events-none transition-transform select-none"
+                    style={{
+                      backgroundColor: config.color,
+                      transform: config.enable3DTilt ? 'translateZ(35px)' : 'none',
+                    }}
+                  >
+                    <span className="truncate whitespace-nowrap">{activeBadge}</span>
+                  </div>
+                )}
+              </div>
+            )
           ) : (
-            <div className="w-48 h-48 sm:w-52 sm:h-52 flex flex-col items-center justify-center text-slate-300 text-xs font-medium border-2 border-dashed border-slate-200 rounded-xl">
-              <QrCode className="w-10 h-10 mb-2 opacity-40" />
-              Enter destination link to render
+            <div className="w-44 h-44 sm:w-52 sm:h-52 flex flex-col items-center justify-center text-slate-400 text-xs font-medium border-2 border-dashed border-slate-200 rounded-xl px-3 sm:px-4 text-center">
+              <QrCode className="w-8 h-8 sm:w-10 sm:h-10 mb-2 text-slate-300" strokeWidth={1.5} />
+              <span className="font-semibold text-slate-600">No content yet</span>
+              <span className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5">Enter a URL, text, or upload a PDF to render your QR code</span>
             </div>
           )}
         </div>
@@ -356,11 +408,11 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
       </motion.div>
 
       {/* Interactive Controls Pill below 3D card */}
-      <div className="w-full max-w-sm flex items-center justify-between mt-3 px-1">
+      <div className="w-full max-w-[340px] sm:max-w-sm flex items-center justify-between mt-3 px-1">
         <button
           type="button"
           onClick={onToggle3D}
-          className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition ${
+          className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg border transition min-h-[36px] ${
             config.enable3DTilt
               ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
               : 'bg-slate-100 border-slate-200 text-slate-500 hover:text-slate-700'
@@ -375,7 +427,7 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
           <button
             type="button"
             onClick={triggerConfetti}
-            className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-700 transition active:scale-95"
+            className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-pink-50 hover:bg-pink-100 border border-pink-200 text-pink-700 transition active:scale-95 min-h-[36px]"
           >
             <PartyPopper className="w-3.5 h-3.5 text-pink-600" />
             <span>Celebrate 🎉</span>

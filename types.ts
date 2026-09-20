@@ -36,6 +36,10 @@ export interface QRConfig {
   enable3DTilt: boolean;
   enableAnimations: boolean;
   frameBannerText?: string;
+  pdfFileName?: string;
+  pdfFileSize?: string;
+  isDynamic?: boolean;
+  uploadedPdfUrl?: string;
 }
 
 export interface ColorOption {
