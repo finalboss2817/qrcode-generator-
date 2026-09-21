@@ -359,12 +359,12 @@ const App: React.FC = () => {
         setPdfUploading(false);
         setPdfError(null);
         setPdfUploadSuccess(false);
-        setConfig((prev) => {
-          if (prev.pdfFileName || prev.uploadedPdfUrl) {
-            return { ...INITIAL_CONFIG };
-          }
-          return prev;
-        });
+        setSavedDynamicQRs([]);
+        setEditingTargetQRId(null);
+        setDestinationUpdateSuccess(null);
+        setTempDestination('');
+        setQuickEditUrl('');
+        setConfig({ ...INITIAL_CONFIG });
       }
     });
 
@@ -542,18 +542,16 @@ const App: React.FC = () => {
     setPdfUploading(false);
     setPdfError(null);
     setPdfUploadSuccess(false);
+    setSavedDynamicQRs([]);
+    setEditingTargetQRId(null);
+    setDestinationUpdateSuccess(null);
+    setTempDestination('');
+    setQuickEditUrl('');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-    // If current configuration was tied to an uploaded Pro PDF document, reset to fresh initial config
-    setConfig((prev) => {
-      if (prev.pdfFileName || prev.uploadedPdfUrl) {
-        return {
-          ...INITIAL_CONFIG,
-        };
-      }
-      return prev;
-    });
+    // Reset to fresh initial config including title caption
+    setConfig({ ...INITIAL_CONFIG });
   };
 
   const clearPdf = () => {
