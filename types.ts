@@ -40,6 +40,17 @@ export interface QRConfig {
   pdfFileSize?: string;
   isDynamic?: boolean;
   uploadedPdfUrl?: string;
+  dynamicId?: string;
+}
+
+export interface SavedDynamicQR {
+  id: string; // unique dynamic ID, e.g. "dyn_abc123"
+  userId: string;
+  title: string;
+  destinationUrl: string; // current redirect target
+  config: QRConfig; // full visual theme and settings snapshot
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ColorOption {

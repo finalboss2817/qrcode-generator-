@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { QRConfig } from '../types';
 import { getBorderThemeById } from '../borderThemes';
+import { getDynamicRedirectUrl } from '../dynamicQRService';
 
 interface QRErrorBoundaryProps {
   children: React.ReactNode;
@@ -38,6 +39,12 @@ class QRErrorBoundary extends React.Component<QRErrorBoundaryProps, QRErrorBound
 
   componentDidCatch(error: any) {
     console.warn('QR Code generation overflow caught safely:', error);
+  }
+
+  componentDidUpdate(prevProps: QRErrorBoundaryProps) {
+    if (this.state.hasError && prevProps.children !== this.props.children) {
+      this.setState({ hasError: false });
+    }
   }
 
   render() {
@@ -339,60 +346,79 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
           </div>
         )}
 
-        {/* Inner White QR Card (Raised in 3D Space) */}
-        <div
-          className="w-full bg-white rounded-xl sm:rounded-2xl p-3 sm:p-5 flex flex-col items-center justify-center relative shadow-md transition-all duration-300 z-10"
-          style={{
-            backgroundColor: config.bgColor,
-            transform: config.enable3DTilt ? 'translateZ(20px)' : 'none',
-          }}
-        >
-          {config.content.trim() ? (
-            config.content.length > 2000 ? (
-              <div className="w-44 h-44 sm:w-52 sm:h-52 flex flex-col items-center justify-center text-amber-800 bg-amber-50/90 rounded-xl p-3 sm:p-4 text-center border border-amber-200">
-                <AlertTriangle className="w-7 h-7 sm:w-8 sm:h-8 mb-1.5 sm:mb-2 text-amber-600" />
-                <span className="font-bold text-xs">Content Exceeds QR Limit</span>
-                <span className="text-[10px] sm:text-[11px] text-amber-700 mt-1 leading-tight">
-                  QR codes can hold up to ~2,000 characters. For large files or PDFs, please paste the hosted link (Google Drive, Dropbox, or web link).
-                </span>
-              </div>
-            ) : (
-              <div className="relative flex items-center justify-center max-w-full p-1">
-                <QRErrorBoundary>
-                  <QRCodeSVG
-                    ref={qrRef}
-                    value={config.content}
-                    size={200}
-                    fgColor={config.color}
-                    bgColor={config.bgColor}
-                    level="H"
-                    marginSize={config.margin}
-                    className="rounded-lg w-full max-w-[200px] sm:max-w-[220px] h-auto aspect-square"
-                  />
-                </QRErrorBoundary>
+        {/* Dynamic QR Badge on Poster */}
+        {config.isDynamic && !bannerText && (
+          <div
+            className="w-full text-center py-0.5 px-2.5 mb-2 rounded-md bg-indigo-950/40 text-indigo-100 text-[9px] font-bold tracking-wider uppercase border border-indigo-300/20 relative z-20 flex items-center justify-center gap-1"
+            style={{ transform: 'translateZ(15px)' }}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span>Dynamic QR • Cloud Managed</span>
+          </div>
+        )}
 
-                {/* Center Overlay Decal (Elevated in 3D) */}
-                {config.centerIcon !== 'none' && activeBadge && (
-                  <div
-                    className="absolute inset-0 m-auto w-9 h-9 sm:w-11 sm:h-11 rounded-lg sm:rounded-xl flex items-center justify-center text-white font-bold text-xs sm:text-sm shadow-md border-2 border-white pointer-events-none transition-transform select-none"
-                    style={{
-                      backgroundColor: config.color,
-                      transform: config.enable3DTilt ? 'translateZ(35px)' : 'none',
-                    }}
-                  >
-                    <span className="truncate whitespace-nowrap">{activeBadge}</span>
+        {/* Inner White QR Card (Raised in 3D Space) */}
+        {(() => {
+          const isDynamicActive = Boolean(config.isDynamic && config.dynamicId);
+          const qrValueToEncode = isDynamicActive ? getDynamicRedirectUrl(config.dynamicId!) : config.content;
+
+          return (
+            <div
+              className="w-full bg-white rounded-xl sm:rounded-2xl p-3 sm:p-5 flex flex-col items-center justify-center relative shadow-md transition-all duration-300 z-10"
+              style={{
+                backgroundColor: config.bgColor,
+                transform: config.enable3DTilt ? 'translateZ(20px)' : 'none',
+              }}
+            >
+              {config.content.trim() ? (
+                config.content.length > 2000 && !isDynamicActive ? (
+                  <div className="w-44 h-44 sm:w-52 sm:h-52 flex flex-col items-center justify-center text-amber-800 bg-amber-50/90 rounded-xl p-3 sm:p-4 text-center border border-amber-200">
+                    <AlertTriangle className="w-7 h-7 sm:w-8 sm:h-8 mb-1.5 sm:mb-2 text-amber-600" />
+                    <span className="font-bold text-xs">Content Exceeds QR Limit</span>
+                    <span className="text-[10px] sm:text-[11px] text-amber-700 mt-1 leading-tight">
+                      QR codes can hold up to ~2,000 characters. For large files or PDFs, please paste the hosted link (Google Drive, Dropbox, or web link).
+                    </span>
                   </div>
-                )}
-              </div>
-            )
-          ) : (
-            <div className="w-44 h-44 sm:w-52 sm:h-52 flex flex-col items-center justify-center text-slate-400 text-xs font-medium border-2 border-dashed border-slate-200 rounded-xl px-3 sm:px-4 text-center">
-              <QrCode className="w-8 h-8 sm:w-10 sm:h-10 mb-2 text-slate-300" strokeWidth={1.5} />
-              <span className="font-semibold text-slate-600">No content yet</span>
-              <span className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5">Enter a URL, text, or upload a PDF to render your QR code</span>
+                ) : (
+                  <div className="relative flex items-center justify-center max-w-full p-1">
+                    <QRErrorBoundary key={qrValueToEncode}>
+                      <QRCodeSVG
+                        key={qrValueToEncode}
+                        ref={qrRef}
+                        value={qrValueToEncode}
+                        size={200}
+                        fgColor={config.color}
+                        bgColor={config.bgColor}
+                        level="H"
+                        marginSize={config.margin}
+                        className="rounded-lg w-full max-w-[200px] sm:max-w-[220px] h-auto aspect-square"
+                      />
+                    </QRErrorBoundary>
+
+                    {/* Center Overlay Decal (Elevated in 3D) */}
+                    {config.centerIcon !== 'none' && activeBadge && (
+                      <div
+                        className="absolute inset-0 m-auto w-9 h-9 sm:w-11 sm:h-11 rounded-lg sm:rounded-xl flex items-center justify-center text-white font-bold text-xs sm:text-sm shadow-md border-2 border-white pointer-events-none transition-transform select-none"
+                        style={{
+                          backgroundColor: config.color,
+                          transform: config.enable3DTilt ? 'translateZ(35px)' : 'none',
+                        }}
+                      >
+                        <span className="truncate whitespace-nowrap">{activeBadge}</span>
+                      </div>
+                    )}
+                  </div>
+                )
+              ) : (
+                <div className="w-44 h-44 sm:w-52 sm:h-52 flex flex-col items-center justify-center text-slate-400 text-xs font-medium border-2 border-dashed border-slate-200 rounded-xl px-3 sm:px-4 text-center">
+                  <QrCode className="w-8 h-8 sm:w-10 sm:h-10 mb-2 text-slate-300" strokeWidth={1.5} />
+                  <span className="font-semibold text-slate-600">No content yet</span>
+                  <span className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5">Enter a URL, text, or upload a PDF to render your QR code</span>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          );
+        })()}
 
         {/* Poster Title Caption */}
         {config.title.trim() && (
