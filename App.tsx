@@ -56,6 +56,7 @@ import { drawThemeDecorationsOnCanvas } from './borderCanvasRenderer';
 import { supabase, PDF_STORAGE_BUCKET } from './supabase';
 import { AuthModal } from './components/AuthModal';
 import { DynamicRedirectView } from './components/DynamicRedirectView';
+import { PdfUploaderHub } from './components/PdfUploaderHub';
 import {
   saveDynamicQRRecord,
   getDynamicRedirectUrl,
@@ -194,33 +195,43 @@ const App: React.FC = () => {
       return;
     }
 
-    const targetUrl = (customDestination !== undefined ? customDestination : config.content).trim();
+    let targetUrl = (customDestination !== undefined ? customDestination : (config.content || config.uploadedPdfUrl || '')).trim();
     if (!targetUrl) {
-      setPdfError('Please enter a destination URL or text before saving your Dynamic QR.');
+      setPdfError('Please enter a destination URL or upload a PDF document before saving.');
       return;
+    }
+
+    // Automatically prefix standard domain formats if user omitted protocol
+    if (!/^https?:\/\//i.test(targetUrl) && !targetUrl.startsWith('data:') && !targetUrl.startsWith('mailto:') && !targetUrl.startsWith('tel:') && (targetUrl.includes('.') || targetUrl.includes('/'))) {
+      targetUrl = `https://${targetUrl}`;
     }
 
     const dynId = (forceNew || !config.dynamicId)
       ? `dyn_${Math.random().toString(36).substring(2, 9)}`
       : config.dynamicId;
 
-    const qrTitle = config.title.trim() || (forceNew ? `Dynamic QR #${savedDynamicQRs.length + 1}` : 'My Dynamic QR');
+    const isPdf = Boolean(config.pdfFileName);
+    const pdfCleanTitle = config.pdfFileName ? config.pdfFileName.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ').trim() : '';
+    const qrTitle = config.title.trim() || pdfCleanTitle || (forceNew ? `Dynamic QR #${savedDynamicQRs.length + 1}` : 'My Dynamic QR');
     const now = new Date().toISOString();
 
     const existingIndex = !forceNew ? savedDynamicQRs.findIndex((item) => item.id === dynId) : -1;
     let updatedList: SavedDynamicQR[];
+
+    const newConfig: QRConfig = {
+      ...config,
+      dynamicId: dynId,
+      content: targetUrl,
+      isDynamic: true,
+      title: qrTitle,
+    };
 
     const newRecord: SavedDynamicQR = {
       id: dynId,
       userId: currentUser.id,
       title: qrTitle,
       destinationUrl: targetUrl,
-      config: {
-        ...config,
-        dynamicId: dynId,
-        content: targetUrl,
-        isDynamic: true,
-      },
+      config: newConfig,
       createdAt: existingIndex >= 0 ? savedDynamicQRs[existingIndex].createdAt : now,
       updatedAt: now,
     };
@@ -242,20 +253,17 @@ const App: React.FC = () => {
     }
 
     // Save to Supabase Database
-    await saveDynamicQRRecord(newRecord, currentUser.id);
+    const saveResult = await saveDynamicQRRecord(newRecord, currentUser.id);
+    if (!saveResult.success && saveResult.error) {
+      console.warn('Supabase DB notice:', saveResult.error);
+    }
 
-    setConfig((prev) => ({
-      ...prev,
-      dynamicId: dynId,
-      content: targetUrl,
-      isDynamic: true,
-      title: prev.title || qrTitle,
-    }));
+    setConfig(newConfig);
 
     if (forceNew || existingIndex < 0) {
-      setDestinationUpdateSuccess(`Created new Dynamic QR "${qrTitle}" (${dynId})! Added to your dashboard.`);
+      setDestinationUpdateSuccess(`Created new Dynamic QR "${qrTitle}" (${dynId})! Added to your saved list.`);
     } else {
-      setDestinationUpdateSuccess(`Updated "${qrTitle}" (${dynId})! Scanners now land on: ${targetUrl}`);
+      setDestinationUpdateSuccess(`Updated "${qrTitle}" (${dynId})! Scanners now land on: ${targetUrl.slice(0, 55)}...`);
     }
     setTimeout(() => setDestinationUpdateSuccess(null), 5000);
   };
@@ -411,7 +419,12 @@ const App: React.FC = () => {
     setPdfUploadSuccess(false);
     if (!file) return;
 
-    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+    const isPdf =
+      file.name.toLowerCase().endsWith('.pdf') ||
+      file.type === 'application/pdf' ||
+      file.type.includes('pdf');
+
+    if (!isPdf) {
       setPdfError('Please select a valid PDF file (.pdf format only).');
       return;
     }
@@ -427,13 +440,13 @@ const App: React.FC = () => {
         ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
         : `${Math.round(file.size / 1024)} KB`;
 
-    const cleanTitle = file.name.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ');
+    const cleanTitle = file.name.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ').trim();
 
     // If user is not logged in, prompt sign up for cloud PDF hosting & dynamic features
     if (!currentUser) {
       setConfig((prev) => ({
         ...prev,
-        title: prev.title || cleanTitle,
+        title: cleanTitle,
         pdfFileName: file.name,
         pdfFileSize: formattedSize,
       }));
@@ -469,11 +482,12 @@ const App: React.FC = () => {
       const generatedDocUrl = publicUrlData.publicUrl;
       const dynId = config.dynamicId || `dyn_${Math.random().toString(36).substring(2, 8)}`;
 
+      // When replacing or uploading a PDF, always update to the new PDF's clean title and file details
       const newConfig: QRConfig = {
         ...config,
         content: generatedDocUrl,
         uploadedPdfUrl: generatedDocUrl,
-        title: config.title || cleanTitle,
+        title: cleanTitle,
         pdfFileName: file.name,
         pdfFileSize: formattedSize,
         isDynamic: true,
@@ -483,37 +497,48 @@ const App: React.FC = () => {
       setConfig(newConfig);
       setPdfUploadSuccess(true);
 
+      // Preserve original creation timestamp if replacing an existing dynamic QR
+      const existingRecord = savedDynamicQRs.find((item) => item.id === dynId);
+      const now = new Date().toISOString();
+
       // Auto-save/update to Supabase Database & saved library
       const recordToSave: SavedDynamicQR = {
         id: dynId,
         userId: currentUser.id,
-        title: newConfig.title || cleanTitle,
+        title: cleanTitle,
         destinationUrl: generatedDocUrl,
         config: newConfig,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        createdAt: existingRecord ? existingRecord.createdAt : now,
+        updatedAt: now,
       };
 
       await saveDynamicQRRecord(recordToSave, currentUser.id);
 
       setSavedDynamicQRs((prev) => {
         const idx = prev.findIndex((item) => item.id === dynId);
+        let list: SavedDynamicQR[];
         if (idx >= 0) {
-          const list = [...prev];
+          list = [...prev];
           list[idx] = recordToSave;
-          return list;
+        } else {
+          list = [recordToSave, ...prev];
         }
-        return [recordToSave, ...prev];
+        try {
+          localStorage.setItem(getStorageKey(currentUser.id), JSON.stringify(list));
+        } catch (e) {
+          console.warn('LocalStorage save notice:', e);
+        }
+        return list;
       });
 
-      setDestinationUpdateSuccess(`PDF uploaded & connected! Scans now instantly open "${file.name}".`);
+      setDestinationUpdateSuccess(`PDF updated! QR now opens "${file.name}".`);
       setTimeout(() => setDestinationUpdateSuccess(null), 5000);
     } catch (err: any) {
       console.error('Supabase PDF upload error:', err);
       const message = err.message || 'Failed to upload PDF document.';
       if (message.includes('bucket') || message.includes('not found') || message.includes('row-level security')) {
         setPdfError(
-          'Document storage notice: Please ensure your "pdf-documents" bucket is set up in Supabase Storage with public access, or paste your document URL below.'
+          'Document storage notice: Please ensure your "pdf-uploads" bucket is set up in Supabase Storage with public access, or paste your document URL below.'
         );
       } else {
         setPdfError(message);
@@ -1378,523 +1403,384 @@ const App: React.FC = () => {
 
               {/* PDF Document Mode */}
               {inputMode === 'pdf' && (
-                <div className="space-y-3.5">
-                  {/* Hidden File Input */}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    onChange={handlePdfFileSelect}
-                    className="hidden"
-                    id="pdf-upload-input"
-                  />
-
-                  {/* Step 1: Upload or Replace PDF File */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="block text-xs font-bold text-slate-800">
-                        1. PDF Document (Cloud Hosted)
-                      </label>
-                      <span className="text-[11px] text-slate-400">PDF up to 25MB</span>
-                    </div>
-
-                    {config.pdfFileName ? (
-                      /* Connected PDF Card */
-                      <div className="p-3 bg-emerald-50/90 border border-emerald-300 rounded-xl flex items-center justify-between gap-3 shadow-2xs">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div className="w-9 h-9 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 shadow-2xs">
-                            <FileText className="w-5 h-5" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-xs font-bold text-slate-900 truncate">
-                              {config.pdfFileName}
-                            </p>
-                            <p className="text-[11px] text-emerald-700 font-semibold flex items-center gap-1 mt-0.5">
-                              <Check className="w-3 h-3" /> Live & Connected ({config.pdfFileSize || 'Ready'})
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={pdfUploading}
-                            className="px-2.5 py-1.5 bg-white hover:bg-slate-50 text-indigo-700 font-bold border border-indigo-200 rounded-lg text-xs transition flex items-center gap-1 shadow-2xs"
-                          >
-                            <Upload className="w-3.5 h-3.5 text-indigo-600" />
-                            <span>{pdfUploading ? 'Uploading...' : 'Replace PDF'}</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={clearPdf}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
-                            title="Remove PDF"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      /* Upload Button / Dropzone */
-                      <div
-                        onClick={() => {
-                          if (!currentUser) {
-                            setAuthReason('Sign up for free to upload PDF documents and create editable dynamic QR codes.');
-                            setIsAuthModalOpen(true);
-                          } else {
-                            fileInputRef.current?.click();
-                          }
-                        }}
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          const file = e.dataTransfer.files?.[0];
-                          if (file) handlePdfUpload(file);
-                        }}
-                        className={`border-2 border-dashed ${
-                          currentUser
-                            ? 'border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50/20'
-                            : 'border-slate-300 hover:border-indigo-300 bg-slate-50/50'
-                        } rounded-xl p-4 sm:p-5 flex items-center justify-center gap-3 cursor-pointer transition text-left group`}
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-white shadow-xs group-hover:scale-105 text-indigo-600 flex items-center justify-center transition border border-slate-100 shrink-0">
-                          {pdfUploading ? (
-                            <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-                          ) : (
-                            <Upload className="w-5 h-5" />
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold text-slate-800">
-                            {pdfUploading
-                              ? 'Uploading document to cloud storage...'
-                              : currentUser
-                              ? 'Click or drag PDF file here to upload'
-                              : 'Sign Up / Log In to Upload PDF Directly'}
-                          </p>
-                          <p className="text-[11px] text-slate-500 mt-0.5">
-                            Upload restaurant menus, product catalogs, brochures, or flyers
-                          </p>
-                        </div>
-                      </div>
-                    )}
-
-                    {pdfError && (
-                      <div className="flex items-center gap-2 text-xs text-rose-600 bg-rose-50 p-2.5 rounded-xl border border-rose-100 mt-2">
-                        <AlertCircle className="w-4 h-4 shrink-0" />
-                        <span>{pdfError}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Step 2: Destination URL Box (Easy & Identical to URL mode!) */}
-                  <div>
-                    <label className="block text-xs font-bold text-slate-800 mb-1.5" htmlFor="pdf-destination-input">
-                      2. Destination URL (Where the QR code redirects)
-                    </label>
-                    <div className="flex gap-2">
-                      <div className="relative flex-1">
-                        <input
-                          id="pdf-destination-input"
-                          type="url"
-                          value={config.content}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setConfig((prev) => ({
-                              ...prev,
-                              content: val,
-                            }));
-                          }}
-                          placeholder="https://... (or upload PDF above)"
-                          className="w-full pl-3.5 pr-8 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 focus:border-slate-900 outline-none transition font-mono text-slate-800 min-h-[42px]"
-                        />
-                        {config.content.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={clearContent}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 transition"
-                            title="Clear URL"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleSaveOrUpdateDynamicQR(config.content)}
-                        className="px-3.5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1.5 shadow-xs"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Save Destination</span>
-                      </button>
-                    </div>
-
-                    <p className="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1">
-                      <span>💡 <strong>To change destination:</strong> Click <em>Replace PDF</em> or paste a new link above, then click <em>Save Destination</em>.</span>
-                    </p>
-                  </div>
-                </div>
+                <PdfUploaderHub
+                  config={config}
+                  currentUser={currentUser}
+                  pdfUploading={pdfUploading}
+                  pdfError={pdfError}
+                  pdfUploadSuccess={pdfUploadSuccess}
+                  destinationUpdateSuccess={destinationUpdateSuccess}
+                  savedDynamicQRs={savedDynamicQRs}
+                  onUploadFile={handlePdfUpload}
+                  onClearPdf={clearPdf}
+                  onSaveDestination={handleSaveOrUpdateDynamicQR}
+                  onOpenAuthModal={(reason) => {
+                    setAuthReason(reason);
+                    setIsAuthModalOpen(true);
+                  }}
+                  onSwitchToTextMode={() => handleSwitchInputMode('text')}
+                  onDismissSuccess={() => setDestinationUpdateSuccess(null)}
+                />
               )}
 
-              {/* Dynamic QR Code Feature & Architecture Section */}
-              <div className="pt-3 border-t border-slate-100 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
-                      <Zap className="w-3.5 h-3.5" />
-                    </div>
-                    <div>
-                      <h3 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                        <span>QR Code Architecture</span>
-                        <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">
-                          {config.isDynamic ? 'Dynamic Active' : 'Static Mode'}
-                        </span>
-                      </h3>
-                      <p className="text-[11px] text-slate-500">
-                        Choose between a permanent static QR or an editable dynamic cloud QR.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Toggle Selector */}
-                  <div className="flex p-0.5 bg-slate-100 rounded-lg text-xs font-semibold">
-                    <button
-                      type="button"
-                      onClick={() => setConfig((prev) => ({ ...prev, isDynamic: false }))}
-                      className={`px-2.5 py-1 rounded-md transition ${
-                        !config.isDynamic
-                          ? 'bg-white text-slate-900 shadow-xs'
-                          : 'text-slate-500 hover:text-slate-900'
-                      }`}
-                    >
-                      Static
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!currentUser) {
-                          setAuthReason('Sign up free to create Dynamic QR codes with editable cloud destinations.');
-                          setIsAuthModalOpen(true);
-                        } else {
-                          setConfig((prev) => ({
-                            ...prev,
-                            isDynamic: true,
-                            dynamicId: prev.dynamicId ?? `dyn_${Math.random().toString(36).substring(2, 8)}`,
-                          }));
-                        }
-                      }}
-                      className={`px-2.5 py-1 rounded-md transition flex items-center gap-1 ${
-                        config.isDynamic
-                          ? 'bg-indigo-600 text-white shadow-xs'
-                          : 'text-slate-500 hover:text-indigo-600'
-                      }`}
-                    >
-                      <Zap className="w-3 h-3" />
-                      <span>Dynamic (Pro)</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Static Mode Guidance */}
-                {!config.isDynamic && (
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/70 flex items-start gap-2.5 text-xs text-slate-600">
-                    <ShieldCheck className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-semibold text-slate-800">Standard Static QR: </span>
-                      The destination is permanently encoded directly into the QR pattern pixels. Free forever, no account required. Once printed, the destination cannot be changed.
-                    </div>
-                  </div>
-                )}
-
-                {/* Dynamic QR Feature — Destination Manager & My Saved Codes Library */}
-                {config.isDynamic && (
-                  <div className="p-4 bg-gradient-to-br from-indigo-50/90 via-blue-50/50 to-white rounded-xl border border-indigo-200/80 shadow-xs space-y-4">
-                    {/* Header */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-2 w-2 relative">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                        </span>
-                        <span className="text-xs font-bold text-slate-900">
-                          Dynamic Cloud Redirection Engine
-                        </span>
+              {/* Dynamic QR Code Feature & Architecture Section - Only shown in Web / Text Mode */}
+              {inputMode === 'text' && (
+                <div className="pt-3 border-t border-slate-100 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                        <Zap className="w-3.5 h-3.5" />
                       </div>
-                      <div className="flex items-center gap-1.5">
+                      <div>
+                        <h3 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                          <span>QR Code Architecture</span>
+                          <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-100">
+                            {config.isDynamic ? 'Dynamic Active' : 'Static Mode'}
+                          </span>
+                        </h3>
+                        <p className="text-[11px] text-slate-500">
+                          Choose between a permanent static QR or an editable dynamic cloud QR.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Toggle Selector */}
+                    <div className="flex p-0.5 bg-slate-100 rounded-lg text-xs font-semibold">
+                      <button
+                        type="button"
+                        onClick={() => setConfig((prev) => ({ ...prev, isDynamic: false }))}
+                        className={`px-2.5 py-1 rounded-md transition ${
+                          !config.isDynamic
+                            ? 'bg-white text-slate-900 shadow-xs'
+                            : 'text-slate-500 hover:text-slate-900'
+                        }`}
+                      >
+                        Static
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!currentUser) {
+                            setAuthReason('Sign up free to create Dynamic QR codes with editable cloud destinations.');
+                            setIsAuthModalOpen(true);
+                          } else {
+                            setConfig((prev) => ({
+                              ...prev,
+                              isDynamic: true,
+                              dynamicId: prev.dynamicId ?? `dyn_${Math.random().toString(36).substring(2, 8)}`,
+                            }));
+                          }
+                        }}
+                        className={`px-2.5 py-1 rounded-md transition flex items-center gap-1 ${
+                          config.isDynamic
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-500 hover:text-indigo-600'
+                        }`}
+                      >
+                        <Zap className="w-3 h-3" />
+                        <span>Dynamic (Pro)</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Static Mode Guidance */}
+                  {!config.isDynamic && (
+                    <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/70 flex items-start gap-2.5 text-xs text-slate-600">
+                      <ShieldCheck className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-slate-800">Standard Static QR: </span>
+                        The destination is permanently encoded directly into the QR pattern pixels. Free forever, no account required. Once printed, the destination cannot be changed.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Dynamic QR Feature — Destination Manager for Web/Text */}
+                  {config.isDynamic && (
+                    <div className="p-4 bg-gradient-to-br from-indigo-50/90 via-blue-50/50 to-white rounded-xl border border-indigo-200/80 shadow-xs space-y-3.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="flex h-2 w-2 relative">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                          </span>
+                          <span className="text-xs font-bold text-slate-900">
+                            Dynamic Cloud Redirection Engine
+                          </span>
+                        </div>
                         <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 border border-indigo-200">
                           ID: {config.dynamicId || 'DYN-ACTIVE'}
                         </span>
                       </div>
-                    </div>
 
-                    {/* How Dynamic Works Explainer (Clean, No Analytics) */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                      <div className="p-2.5 bg-white/90 rounded-lg border border-indigo-100 shadow-2xs">
-                        <div className="font-bold text-slate-800 flex items-center gap-1.5 mb-0.5">
-                          <span className="w-4 h-4 rounded-full bg-indigo-100 text-indigo-700 text-[10px] flex items-center justify-center font-black">1</span>
-                          <span>Print Once, Lasts Forever</span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 leading-relaxed">
-                          Your printed QR code image never changes. Print posters, cards, or signs.
-                        </p>
-                      </div>
-
-                      <div className="p-2.5 bg-white/90 rounded-lg border border-indigo-100 shadow-2xs">
-                        <div className="font-bold text-slate-800 flex items-center gap-1.5 mb-0.5">
-                          <span className="w-4 h-4 rounded-full bg-indigo-100 text-indigo-700 text-[10px] flex items-center justify-center font-black">2</span>
-                          <span>Update Target Anytime</span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 leading-relaxed">
-                          Change where scanners land whenever you want without reprinting anything.
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Current Dynamic Code Destination & Save Action */}
-                    <div className="bg-white rounded-xl p-3.5 border border-indigo-100 space-y-2.5">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-semibold text-slate-700">QR Destination:</span>
-                        {!isEditingDestination && (
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setTempDestination(config.content);
-                                setIsEditingDestination(true);
-                                setDestinationUpdateSuccess(null);
-                              }}
-                              className="text-indigo-600 hover:text-indigo-800 font-bold text-xs flex items-center gap-1"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                              <span>Change Destination</span>
-                            </button>
-                            {savedDynamicQRs.some((item) => item.id === config.dynamicId) ? (
-                              <div className="flex items-center gap-1.5">
+                      <div className="bg-white rounded-xl p-3.5 border border-indigo-100 space-y-2.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-semibold text-slate-700">QR Destination:</span>
+                          {!isEditingDestination && (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setTempDestination(config.content);
+                                  setIsEditingDestination(true);
+                                  setDestinationUpdateSuccess(null);
+                                }}
+                                className="text-indigo-600 hover:text-indigo-800 font-bold text-xs flex items-center gap-1"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                                <span>Change Destination</span>
+                              </button>
+                              {savedDynamicQRs.some((item) => item.id === config.dynamicId) ? (
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSaveOrUpdateDynamicQR()}
+                                    title="Update destination for this active QR code"
+                                    className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-semibold text-[11px] shadow-2xs transition"
+                                  >
+                                    Update This QR
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSaveOrUpdateDynamicQR(undefined, true)}
+                                    title="Save as a separate new QR code without replacing previous ones"
+                                    className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md font-semibold text-[11px] shadow-2xs transition flex items-center gap-1"
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                    <span>Save as New QR</span>
+                                  </button>
+                                </div>
+                              ) : (
                                 <button
                                   type="button"
                                   onClick={() => handleSaveOrUpdateDynamicQR()}
-                                  title="Update destination for this active QR code"
                                   className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-semibold text-[11px] shadow-2xs transition"
                                 >
-                                  Update This QR
+                                  Save to My Account
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleSaveOrUpdateDynamicQR(undefined, true)}
-                                  title="Save as a separate new QR code without replacing previous ones"
-                                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md font-semibold text-[11px] shadow-2xs transition flex items-center gap-1"
-                                >
-                                  <Plus className="w-3 h-3" />
-                                  <span>Save as New QR</span>
-                                </button>
-                              </div>
-                            ) : (
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {isEditingDestination ? (
+                          <div className="space-y-2">
+                            <input
+                              type="text"
+                              value={tempDestination}
+                              onChange={(e) => setTempDestination(e.target.value)}
+                              placeholder="Type new URL or message..."
+                              className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:ring-2 focus:ring-indigo-600 outline-none font-mono text-slate-800"
+                            />
+                            <div className="flex items-center justify-end gap-2">
                               <button
                                 type="button"
-                                onClick={() => handleSaveOrUpdateDynamicQR()}
-                                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-semibold text-[11px] shadow-2xs transition"
+                                onClick={() => setIsEditingDestination(false)}
+                                className="px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-md transition"
                               >
-                                Save to My Account
+                                Cancel
                               </button>
-                            )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleSaveOrUpdateDynamicQR(tempDestination);
+                                  setIsEditingDestination(false);
+                                }}
+                                className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-md shadow-xs transition"
+                              >
+                                Update Destination
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="p-2.5 bg-slate-50 rounded-lg font-mono text-xs text-slate-700 truncate border border-slate-100 flex items-center justify-between">
+                            <span className="truncate">
+                              {config.content.trim() ? (
+                                config.content
+                              ) : (
+                                <span className="text-slate-400 italic font-sans">
+                                  No destination set yet — type a URL above
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-[10px] font-sans font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 ml-2 shrink-0">
+                              Active
+                            </span>
+                          </div>
+                        )}
+
+                        {destinationUpdateSuccess && (
+                          <div className="p-2.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg text-xs flex items-center justify-between">
+                            <div className="flex items-center gap-1.5">
+                              <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>{destinationUpdateSuccess}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setDestinationUpdateSuccess(null)}
+                              className="text-emerald-600 hover:text-emerald-900 ml-2"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
                           </div>
                         )}
                       </div>
-
-                      {isEditingDestination ? (
-                        <div className="space-y-2">
-                          <input
-                            type="text"
-                            value={tempDestination}
-                            onChange={(e) => setTempDestination(e.target.value)}
-                            placeholder="Type new URL or message..."
-                            className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:ring-2 focus:ring-indigo-600 outline-none font-mono text-slate-800"
-                          />
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setIsEditingDestination(false)}
-                              className="px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-md transition"
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                handleSaveOrUpdateDynamicQR(tempDestination);
-                                setIsEditingDestination(false);
-                              }}
-                              className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-md shadow-xs transition"
-                            >
-                              Update Destination
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="p-2.5 bg-slate-50 rounded-lg font-mono text-xs text-slate-700 truncate border border-slate-100 flex items-center justify-between">
-                          <span className="truncate">{config.content.trim() ? config.content : <span className="text-slate-400 italic font-sans">No destination set yet — type a URL above</span>}</span>
-                          <span className="text-[10px] font-sans font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 ml-2 shrink-0">
-                            Active
-                          </span>
-                        </div>
-                      )}
-
-                      {destinationUpdateSuccess && (
-                        <div className="p-2.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg text-xs flex items-center justify-between">
-                          <div className="flex items-center gap-1.5">
-                            <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                            <span>{destinationUpdateSuccess}</span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setDestinationUpdateSuccess(null)}
-                            className="text-emerald-600 hover:text-emerald-900 ml-2"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )}
                     </div>
+                  )}
+                </div>
+              )}
 
-                    {/* Saved Dynamic Codes Library (Restored on Login) */}
-                    <div className="pt-2 border-t border-indigo-100 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
-                          <FolderOpen className="w-4 h-4 text-indigo-600" />
-                          <span>My Saved Dynamic QR Codes</span>
-                          <span className="text-[11px] font-bold px-1.5 py-0.2 rounded-full bg-slate-200/80 text-slate-700">
-                            {savedDynamicQRs.length}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={handleCreateNewDynamicQR}
-                          className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 transition"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>New Dynamic QR</span>
-                        </button>
-                      </div>
-
-                      {savedDynamicQRs.length === 0 ? (
-                        <div className="p-3 bg-white/70 rounded-lg border border-dashed border-indigo-200 text-center text-xs text-slate-500">
-                          <p>No saved dynamic QR codes yet.</p>
-                          <p className="text-[11px] text-slate-400 mt-0.5">
-                            Enter your destination above and click <strong>Save to My Account</strong>. When you log back in, all your dynamic QR codes will appear here so you can change their destinations anytime.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-2 max-h-56 overflow-y-auto pr-0.5">
-                          {savedDynamicQRs.map((item) => {
-                            const isCurrentlyLoaded = config.dynamicId === item.id;
-                            const isEditingThis = editingTargetQRId === item.id;
-
-                            return (
-                              <div
-                                key={item.id}
-                                className={`p-2.5 rounded-lg border text-xs transition ${
-                                  isCurrentlyLoaded
-                                    ? 'bg-indigo-50/70 border-indigo-300 shadow-2xs'
-                                    : 'bg-white border-slate-200 hover:border-indigo-200'
-                                }`}
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="font-bold text-slate-900 truncate">
-                                        {item.title || 'Dynamic QR'}
-                                      </span>
-                                      <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
-                                        {item.id}
-                                      </span>
-                                      {isCurrentlyLoaded && (
-                                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-indigo-600 text-white shrink-0">
-                                          Editing in Canvas
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="font-mono text-[11px] text-indigo-700 truncate mt-0.5">
-                                      → {item.destinationUrl}
-                                    </div>
-                                  </div>
-
-                                  <div className="flex items-center gap-1 shrink-0">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleLoadDynamicQR(item)}
-                                      title="Load this QR into editor"
-                                      className="px-2 py-1 bg-slate-100 hover:bg-indigo-100 hover:text-indigo-800 text-slate-700 font-semibold rounded text-[11px] transition flex items-center gap-1"
-                                    >
-                                      <span>Load</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setEditingTargetQRId(isEditingThis ? null : item.id);
-                                        setQuickEditUrl(item.destinationUrl);
-                                      }}
-                                      title="Change destination URL"
-                                      className="p-1 hover:bg-slate-100 text-slate-500 hover:text-slate-800 rounded transition"
-                                    >
-                                      <Edit3 className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteDynamicQR(item.id)}
-                                      title="Delete dynamic QR"
-                                      className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded transition"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </div>
-
-                                {/* Quick inline destination editor */}
-                                {isEditingThis && (
-                                  <div className="mt-2 pt-2 border-t border-slate-200/80 space-y-1.5">
-                                    <label className="block text-[10px] font-semibold text-slate-600">
-                                      New Destination for {item.id}:
-                                    </label>
-                                    <div className="flex gap-1.5">
-                                      <input
-                                        type="text"
-                                        value={quickEditUrl}
-                                        onChange={(e) => setQuickEditUrl(e.target.value)}
-                                        className="flex-1 px-2 py-1 text-xs bg-white border border-slate-300 rounded focus:ring-2 focus:ring-indigo-600 outline-none font-mono text-slate-800"
-                                        placeholder="https://..."
-                                      />
-                                      <button
-                                        type="button"
-                                        onClick={() => handleQuickUpdateDestination(item.id, quickEditUrl)}
-                                        className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded text-[11px] transition shadow-2xs"
-                                      >
-                                        Update
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setEditingTargetQRId(null)}
-                                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-[11px] transition"
-                                      >
-                                        Cancel
-                                      </button>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+              {/* Saved Dynamic Codes Library (Shared for both Web & PDF codes) */}
+              {(savedDynamicQRs.length > 0 || (currentUser && (config.isDynamic || inputMode === 'pdf'))) && (
+                <div className="pt-3 border-t border-slate-100 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                      <FolderOpen className="w-4 h-4 text-indigo-600" />
+                      <span>My Saved Dynamic QR Codes</span>
+                      <span className="text-[11px] font-bold px-1.5 py-0.2 rounded-full bg-slate-200/80 text-slate-700">
+                        {savedDynamicQRs.length}
+                      </span>
                     </div>
+                    <button
+                      type="button"
+                      onClick={handleCreateNewDynamicQR}
+                      className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 transition"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>New Dynamic QR</span>
+                    </button>
                   </div>
-                )}
-              </div>
+
+                  {savedDynamicQRs.length === 0 ? (
+                    <div className="p-3 bg-slate-50/70 rounded-xl border border-dashed border-slate-200 text-center text-xs text-slate-500">
+                      <p>No saved dynamic QR codes yet.</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Your saved PDF and URL dynamic codes will appear here so you can update them anytime.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-0.5">
+                      {savedDynamicQRs.map((item) => {
+                        const isCurrentlyLoaded = config.dynamicId === item.id;
+                        const isEditingThis = editingTargetQRId === item.id;
+                        const isPdfItem = Boolean(item.config.pdfFileName);
+
+                        return (
+                          <div
+                            key={item.id}
+                            className={`p-2.5 rounded-xl border text-xs transition ${
+                              isCurrentlyLoaded
+                                ? 'bg-indigo-50/70 border-indigo-300 shadow-2xs'
+                                : 'bg-white border-slate-200 hover:border-indigo-200'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-bold text-slate-900 truncate">
+                                    {isPdfItem
+                                      ? (item.config.pdfFileName ? item.config.pdfFileName.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ') : item.title || 'PDF Document')
+                                      : (item.title || 'Dynamic QR')}
+                                  </span>
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded shrink-0 ${
+                                    isPdfItem ? 'bg-rose-100 text-rose-800' : 'bg-indigo-100 text-indigo-800'
+                                  }`}>
+                                    {isPdfItem ? 'PDF' : 'URL'}
+                                  </span>
+                                  <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                                    {item.id}
+                                  </span>
+                                  {isCurrentlyLoaded && (
+                                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-indigo-600 text-white shrink-0">
+                                      Active
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] truncate mt-0.5">
+                                  {isPdfItem ? (
+                                    <span className="text-slate-600 flex items-center gap-1 font-medium">
+                                      <FileText className="w-3 h-3 text-rose-500 shrink-0" />
+                                      <span className="truncate">{item.config.pdfFileName || item.title}</span>
+                                      {item.config.pdfFileSize && (
+                                        <span className="text-slate-400 text-[10px] shrink-0">({item.config.pdfFileSize})</span>
+                                      )}
+                                    </span>
+                                  ) : (
+                                    <span className="font-mono text-indigo-700 truncate">
+                                      → {item.destinationUrl}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleLoadDynamicQR(item)}
+                                  title="Load this QR into editor"
+                                  className="px-2 py-1 bg-slate-100 hover:bg-indigo-100 hover:text-indigo-800 text-slate-700 font-semibold rounded text-[11px] transition flex items-center gap-1"
+                                >
+                                  <span>Load</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingTargetQRId(isEditingThis ? null : item.id);
+                                    setQuickEditUrl(item.destinationUrl);
+                                  }}
+                                  title="Change destination URL"
+                                  className="p-1 hover:bg-slate-100 text-slate-500 hover:text-slate-800 rounded transition"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteDynamicQR(item.id)}
+                                  title="Delete dynamic QR"
+                                  className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded transition"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Quick inline destination editor */}
+                            {isEditingThis && (
+                              <div className="mt-2 pt-2 border-t border-slate-200/80 space-y-1.5">
+                                <label className="block text-[10px] font-semibold text-slate-600">
+                                  New Destination for {item.id}:
+                                </label>
+                                <div className="flex gap-1.5">
+                                  <input
+                                    type="text"
+                                    value={quickEditUrl}
+                                    onChange={(e) => setQuickEditUrl(e.target.value)}
+                                    className="flex-1 px-2 py-1 text-xs bg-white border border-slate-300 rounded focus:ring-2 focus:ring-indigo-600 outline-none font-mono text-slate-800"
+                                    placeholder="https://..."
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleQuickUpdateDestination(item.id, quickEditUrl)}
+                                    className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded text-[11px] transition shadow-2xs"
+                                  >
+                                    Update
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingTargetQRId(null)}
+                                    className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-[11px] transition"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Poster Title Caption (Step 1 Part B) */}
               <div className="pt-2 border-t border-slate-100">
