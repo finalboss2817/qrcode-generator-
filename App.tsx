@@ -186,8 +186,8 @@ const App: React.FC = () => {
     };
   }, [currentUser]);
 
-  // Save or Update dynamic QR function
-  const handleSaveOrUpdateDynamicQR = async (customDestination?: string) => {
+  // Save or Update dynamic QR function (supports forceNew to create multiple QRs)
+  const handleSaveOrUpdateDynamicQR = async (customDestination?: string, forceNew: boolean = false) => {
     if (!currentUser) {
       setAuthReason('Sign up free to save and manage your Dynamic QR codes in your account.');
       setIsAuthModalOpen(true);
@@ -200,11 +200,14 @@ const App: React.FC = () => {
       return;
     }
 
-    const dynId = config.dynamicId || `dyn_${Math.random().toString(36).substring(2, 9)}`;
-    const qrTitle = config.title.trim() || 'My Dynamic QR';
+    const dynId = (forceNew || !config.dynamicId)
+      ? `dyn_${Math.random().toString(36).substring(2, 9)}`
+      : config.dynamicId;
+
+    const qrTitle = config.title.trim() || (forceNew ? `Dynamic QR #${savedDynamicQRs.length + 1}` : 'My Dynamic QR');
     const now = new Date().toISOString();
 
-    const existingIndex = savedDynamicQRs.findIndex((item) => item.id === dynId);
+    const existingIndex = !forceNew ? savedDynamicQRs.findIndex((item) => item.id === dynId) : -1;
     let updatedList: SavedDynamicQR[];
 
     const newRecord: SavedDynamicQR = {
@@ -230,8 +233,15 @@ const App: React.FC = () => {
     }
 
     setSavedDynamicQRs(updatedList);
-    
-    // Save to LocalStorage + Cloud Firestore
+
+    // Save to LocalStorage immediately
+    try {
+      localStorage.setItem(getStorageKey(currentUser.id), JSON.stringify(updatedList));
+    } catch (e) {
+      console.warn('LocalStorage save notice:', e);
+    }
+
+    // Save to Supabase Database
     await saveDynamicQRRecord(newRecord, currentUser.id);
 
     setConfig((prev) => ({
@@ -239,9 +249,14 @@ const App: React.FC = () => {
       dynamicId: dynId,
       content: targetUrl,
       isDynamic: true,
+      title: prev.title || qrTitle,
     }));
 
-    setDestinationUpdateSuccess(`Saved! Dynamic destination for "${qrTitle}" (${dynId}) is updated. Scanners will now see: ${targetUrl}`);
+    if (forceNew || existingIndex < 0) {
+      setDestinationUpdateSuccess(`Created new Dynamic QR "${qrTitle}" (${dynId})! Added to your dashboard.`);
+    } else {
+      setDestinationUpdateSuccess(`Updated "${qrTitle}" (${dynId})! Scanners now land on: ${targetUrl}`);
+    }
     setTimeout(() => setDestinationUpdateSuccess(null), 5000);
   };
 
@@ -430,7 +445,6 @@ const App: React.FC = () => {
     // Authenticated: Upload to Supabase Storage Bucket
     try {
       setPdfUploading(true);
-      const fileExt = 'pdf';
       const cleanFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
       const uniquePath = `${currentUser.id}/${Date.now()}_${cleanFileName}`;
 
@@ -443,7 +457,6 @@ const App: React.FC = () => {
         });
 
       if (uploadError) {
-        // If the bucket does not exist yet or requires public read, inform user with graceful fallback
         console.warn('Supabase storage upload notice:', uploadError);
         throw uploadError;
       }
@@ -454,24 +467,53 @@ const App: React.FC = () => {
         .getPublicUrl(uniquePath);
 
       const generatedDocUrl = publicUrlData.publicUrl;
+      const dynId = config.dynamicId || `dyn_${Math.random().toString(36).substring(2, 8)}`;
 
-      setConfig((prev) => ({
-        ...prev,
+      const newConfig: QRConfig = {
+        ...config,
         content: generatedDocUrl,
         uploadedPdfUrl: generatedDocUrl,
-        title: prev.title || cleanTitle,
+        title: config.title || cleanTitle,
         pdfFileName: file.name,
         pdfFileSize: formattedSize,
         isDynamic: true,
-      }));
+        dynamicId: dynId,
+      };
+
+      setConfig(newConfig);
       setPdfUploadSuccess(true);
+
+      // Auto-save/update to Supabase Database & saved library
+      const recordToSave: SavedDynamicQR = {
+        id: dynId,
+        userId: currentUser.id,
+        title: newConfig.title || cleanTitle,
+        destinationUrl: generatedDocUrl,
+        config: newConfig,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      await saveDynamicQRRecord(recordToSave, currentUser.id);
+
+      setSavedDynamicQRs((prev) => {
+        const idx = prev.findIndex((item) => item.id === dynId);
+        if (idx >= 0) {
+          const list = [...prev];
+          list[idx] = recordToSave;
+          return list;
+        }
+        return [recordToSave, ...prev];
+      });
+
+      setDestinationUpdateSuccess(`PDF uploaded & connected! Scans now instantly open "${file.name}".`);
+      setTimeout(() => setDestinationUpdateSuccess(null), 5000);
     } catch (err: any) {
       console.error('Supabase PDF upload error:', err);
-      // Helpful troubleshooting guidance
       const message = err.message || 'Failed to upload PDF document.';
       if (message.includes('bucket') || message.includes('not found') || message.includes('row-level security')) {
         setPdfError(
-          'Document storage notice: Please ensure your cloud storage is initialized or paste your document link in the box below.'
+          'Document storage notice: Please ensure your "pdf-documents" bucket is set up in Supabase Storage with public access, or paste your document URL below.'
         );
       } else {
         setPdfError(message);
@@ -1192,6 +1234,30 @@ const App: React.FC = () => {
                 </div>
               </div>
 
+              {/* Dynamic QR Active State Banner (Top of Editor) */}
+              {currentUser && config.dynamicId && savedDynamicQRs.some((item) => item.id === config.dynamicId) && (
+                <div className="p-2.5 bg-indigo-50/90 border border-indigo-200 rounded-xl flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 animate-pulse"></span>
+                    <span className="text-slate-600 font-medium shrink-0">Editing:</span>
+                    <span className="font-bold text-slate-900 truncate">
+                      "{config.title || 'Dynamic QR'}"
+                    </span>
+                    <span className="font-mono text-[10px] text-indigo-700 bg-white px-1.5 py-0.5 rounded border border-indigo-100 shrink-0 hidden sm:inline-block">
+                      {config.dynamicId}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCreateNewDynamicQR}
+                    className="shrink-0 px-2.5 py-1 bg-white hover:bg-indigo-600 hover:text-white text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-2xs"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Create New QR</span>
+                  </button>
+                </div>
+              )}
+
               {/* Source Mode Toggle: Web URL / Text vs PDF File */}
               <div className="flex p-1 bg-slate-100 rounded-xl gap-1">
                 <button
@@ -1315,21 +1381,19 @@ const App: React.FC = () => {
               {/* PDF Document Mode */}
               {inputMode === 'pdf' && (
                 <div className="space-y-4">
-                  {/* Pro Feature Highlights */}
-                  <div className="p-3.5 bg-gradient-to-r from-indigo-50/90 to-blue-50/80 rounded-xl border border-indigo-100 flex items-start justify-between gap-3 text-xs">
-                    <div className="flex items-start gap-2.5">
-                      <Sparkles className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                  {/* Pro Cloud Storage Banner */}
+                  <div className="p-3.5 bg-gradient-to-r from-indigo-50/90 to-blue-50/80 rounded-xl border border-indigo-100 flex items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-2.5">
+                      <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
                       <div>
                         <p className="font-semibold text-slate-900 flex items-center gap-1.5">
-                          <span>Direct PDF-to-QR Cloud Hosting</span>
+                          <span>PDF-to-QR Cloud Hosting</span>
                           <span className="text-[10px] uppercase font-bold px-1.5 py-0.2 rounded bg-indigo-600 text-white">
-                            Pro
+                            Dynamic Pro
                           </span>
                         </p>
-                        <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
-                          {currentUser
-                            ? 'Drop your PDF file below. It is stored securely in the cloud and connected directly to your QR code.'
-                            : 'Upload a PDF to instantly generate a scannable QR code. Free sign-up is required to securely store your files.'}
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          Upload any PDF. When you replace it or change the link later, your downloaded QR code keeps working automatically!
                         </p>
                       </div>
                     </div>
@@ -1347,111 +1411,156 @@ const App: React.FC = () => {
                     )}
                   </div>
 
-                  {/* Direct Cloud Upload Box */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="block text-xs font-semibold text-slate-700">
-                        Upload PDF Document
-                      </label>
-                      <span className="text-[11px] text-slate-400">PDF up to 25MB</span>
-                    </div>
+                  {/* Hidden File Input */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="application/pdf,.pdf"
+                    onChange={handlePdfFileSelect}
+                    className="hidden"
+                    id="pdf-upload-input"
+                  />
 
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="application/pdf,.pdf"
-                      onChange={handlePdfFileSelect}
-                      className="hidden"
-                      id="pdf-upload-input"
-                    />
-
-                    {config.pdfFileName ? (
-                      <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/60 flex items-center justify-between gap-3">
+                  {config.pdfFileName ? (
+                    /* Active Uploaded PDF Card */
+                    <div className="p-4 rounded-xl border-2 border-emerald-200 bg-emerald-50/50 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-9 h-9 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                          <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0 shadow-2xs">
                             <FileText className="w-5 h-5" />
                           </div>
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-slate-900 truncate">
                               {config.pdfFileName}
                             </p>
-                            <p className="text-[11px] text-slate-500 font-medium flex items-center gap-1.5">
-                              <span>PDF Document • {config.pdfFileSize || 'Ready'}</span>
-                              {pdfUploadSuccess && (
-                                <span className="text-emerald-700 font-semibold flex items-center gap-0.5">
-                                  <Check className="w-3 h-3" /> Connected & Ready
-                                </span>
-                              )}
-                            </p>
+                            <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                              <span className="text-[11px] text-slate-500 font-medium">
+                                {config.pdfFileSize || 'PDF Document'}
+                              </span>
+                              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 flex items-center gap-1">
+                                <Check className="w-3 h-3" /> Live & Connected
+                              </span>
+                            </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={pdfUploading}
-                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition"
-                          >
-                            Replace
-                          </button>
-                          <button
-                            type="button"
-                            onClick={clearPdf}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
-                            title="Remove PDF reference"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+
+                        <button
+                          type="button"
+                          onClick={clearPdf}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                          title="Remove PDF"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
-                    ) : (
-                      <div
-                        onClick={() => {
-                          if (!currentUser) {
-                            setAuthReason('Create a free account to upload PDF documents and create editable QR codes.');
-                            setIsAuthModalOpen(true);
-                          } else {
-                            fileInputRef.current?.click();
-                          }
-                        }}
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          const file = e.dataTransfer.files?.[0];
-                          if (file) handlePdfUpload(file);
-                        }}
-                        className={`border-2 border-dashed ${
-                          currentUser
-                            ? 'border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50/20'
-                            : 'border-slate-300 hover:border-indigo-300 bg-slate-50/50'
-                        } rounded-xl p-5 flex flex-col items-center justify-center cursor-pointer transition text-center group min-h-[110px]`}
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-white shadow-xs group-hover:scale-105 text-indigo-600 flex items-center justify-center transition mb-2 border border-slate-100">
-                          {pdfUploading ? (
-                            <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-                          ) : (
-                            <Upload className="w-5 h-5" />
-                          )}
-                        </div>
-                        <span className="text-xs font-bold text-slate-800">
-                          {pdfUploading
-                            ? 'Uploading document...'
-                            : currentUser
-                            ? 'Click or drag PDF here to upload & link'
-                            : 'Sign up / Log in to upload your PDF directly'}
-                        </span>
-                        <span className="text-[11px] text-slate-400 mt-0.5">
-                          {currentUser
-                            ? 'Creates an instant scannable link for your document'
-                            : 'Free account • Stores files securely online'}
-                        </span>
+
+                      {/* PDF Action Buttons */}
+                      <div className="pt-2 border-t border-emerald-100/80 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={pdfUploading}
+                          className="flex-1 px-3 py-2 rounded-lg bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition shadow-2xs"
+                        >
+                          <Upload className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>{pdfUploading ? 'Uploading...' : 'Replace with New PDF'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTempDestination(config.content);
+                            setIsEditingDestination(!isEditingDestination);
+                          }}
+                          className="px-3 py-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>Change Target URL</span>
+                        </button>
                       </div>
-                    )}
-                  </div>
+
+                      {/* Inline Destination Modifier */}
+                      {isEditingDestination && (
+                        <div className="pt-2 border-t border-emerald-100 space-y-2">
+                          <label className="block text-[11px] font-semibold text-slate-700">
+                            New Destination (URL or text):
+                          </label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={tempDestination}
+                              onChange={(e) => setTempDestination(e.target.value)}
+                              placeholder="https://example.com/new-menu.pdf"
+                              className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-600 font-mono text-slate-800"
+                            />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (tempDestination.trim()) {
+                                  if (config.dynamicId) {
+                                    await handleUpdateQRDestination(config.dynamicId, tempDestination);
+                                  } else {
+                                    setConfig((prev) => ({ ...prev, content: tempDestination.trim() }));
+                                  }
+                                  setIsEditingDestination(false);
+                                }
+                              }}
+                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-2xs transition"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* Clean Drop & Upload Zone */
+                    <div
+                      onClick={() => {
+                        if (!currentUser) {
+                          setAuthReason('Create a free account to upload PDF documents and create editable QR codes.');
+                          setIsAuthModalOpen(true);
+                        } else {
+                          fileInputRef.current?.click();
+                        }
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) handlePdfUpload(file);
+                      }}
+                      className={`border-2 border-dashed ${
+                        currentUser
+                          ? 'border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50/20'
+                          : 'border-slate-300 hover:border-indigo-300 bg-slate-50/50'
+                      } rounded-2xl p-6 sm:p-8 flex flex-col items-center justify-center cursor-pointer transition text-center group min-h-[140px]`}
+                    >
+                      <div className="w-12 h-12 rounded-2xl bg-white shadow-xs group-hover:scale-105 text-indigo-600 flex items-center justify-center transition mb-2.5 border border-slate-100">
+                        {pdfUploading ? (
+                          <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <Upload className="w-6 h-6" />
+                        )}
+                      </div>
+                      <span className="text-sm font-bold text-slate-800">
+                        {pdfUploading
+                          ? 'Uploading document to cloud storage...'
+                          : currentUser
+                          ? 'Click or drag PDF file here to upload'
+                          : 'Sign Up / Log In to Upload PDF Directly'}
+                      </span>
+                      <span className="text-xs text-slate-500 mt-1">
+                        {currentUser
+                          ? 'Supports digital menus, product catalogs, brochures, flyers (up to 25MB)'
+                          : 'Free Pro Account • Secure cloud storage & editable QR destination'}
+                      </span>
+                    </div>
+                  )}
 
                   {pdfError && (
                     <div className="flex items-center gap-2 text-xs text-rose-600 bg-rose-50 p-2.5 rounded-xl border border-rose-100">
@@ -1459,73 +1568,6 @@ const App: React.FC = () => {
                       <span>{pdfError}</span>
                     </div>
                   )}
-
-                  {/* Or enter external link */}
-                  <div className="pt-2 border-t border-slate-100">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="block text-xs font-semibold text-slate-700" htmlFor="pdf-link-url">
-                        Or link an existing document URL <span className="text-slate-400 font-normal">(Google Drive, Dropbox, website)</span>
-                      </label>
-                      {config.content.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={clearContent}
-                          className="text-[11px] font-semibold text-slate-400 hover:text-rose-600 flex items-center gap-1 transition"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                          <span>Clear link</span>
-                        </button>
-                      )}
-                    </div>
-                    <div className="relative">
-                      <input
-                        id="pdf-link-url"
-                        name="content"
-                        type="url"
-                        placeholder="https://drive.google.com/file/d/... or https://example.com/menu.pdf"
-                        value={config.content}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setConfig((prev) => ({
-                            ...prev,
-                            content: val,
-                            pdfFileName: undefined,
-                            pdfFileSize: undefined,
-                            uploadedPdfUrl: undefined,
-                          }));
-                        }}
-                        className="w-full pl-3.5 pr-16 py-3 sm:py-2.5 text-base sm:text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-600 focus:border-indigo-600 outline-none transition font-mono text-slate-800 min-h-[44px]"
-                      />
-                      <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
-                        {config.content.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={clearContent}
-                            title="Clear link"
-                            className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        )}
-                        <Link2 className="w-4 h-4 text-slate-400 pointer-events-none" />
-                      </div>
-                    </div>
-
-                    {/* Real-time Content Validation Feedback for Document Link */}
-                    <div className="mt-2 flex items-center justify-between text-[11px] px-0.5">
-                      {!config.content.trim() ? (
-                        <span className="text-amber-600 font-medium flex items-center gap-1">
-                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                          No link attached — upload a PDF file or paste an online document link
-                        </span>
-                      ) : (
-                        <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                          <Check className="w-3.5 h-3.5 shrink-0" />
-                          Document link connected & scannable
-                        </span>
-                      )}
-                    </div>
-                  </div>
                 </div>
               )}
 
@@ -1661,13 +1703,35 @@ const App: React.FC = () => {
                               <Edit3 className="w-3.5 h-3.5" />
                               <span>Change Destination</span>
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleSaveOrUpdateDynamicQR()}
-                              className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-semibold text-[11px] shadow-2xs transition"
-                            >
-                              Save to My Account
-                            </button>
+                            {savedDynamicQRs.some((item) => item.id === config.dynamicId) ? (
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleSaveOrUpdateDynamicQR()}
+                                  title="Update destination for this active QR code"
+                                  className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-semibold text-[11px] shadow-2xs transition"
+                                >
+                                  Update This QR
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSaveOrUpdateDynamicQR(undefined, true)}
+                                  title="Save as a separate new QR code without replacing previous ones"
+                                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md font-semibold text-[11px] shadow-2xs transition flex items-center gap-1"
+                                >
+                                  <Plus className="w-3 h-3" />
+                                  <span>Save as New QR</span>
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleSaveOrUpdateDynamicQR()}
+                                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-semibold text-[11px] shadow-2xs transition"
+                              >
+                                Save to My Account
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
