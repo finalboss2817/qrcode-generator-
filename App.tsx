@@ -101,7 +101,16 @@ const App: React.FC = () => {
   const [isSharingNative, setIsSharingNative] = useState<boolean>(false);
 
   // Supabase Auth and Pro Access States
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const stored = localStorage.getItem("qr_auth_user");
+      if (stored) return JSON.parse(stored);
+    } catch (e) {
+      console.warn("Local user restore notice:", e);
+    }
+    return null;
+  });
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [authReason, setAuthReason] = useState<string>('');
   const [pdfUploadSuccess, setPdfUploadSuccess] = useState<boolean>(false);
@@ -353,25 +362,49 @@ const App: React.FC = () => {
 
   // Listen to Supabase Auth state changes
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setCurrentUser(session?.user ?? null);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        if (session?.user) {
+          setCurrentUser(session.user);
+          try {
+            localStorage.setItem("qr_auth_user", JSON.stringify(session.user));
+          } catch (e) {
+            console.warn("Storage save notice:", e);
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn("Supabase getSession notice:", err?.message || err);
+      });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
       const user = session?.user ?? null;
-      setCurrentUser(user);
-      if (event === 'SIGNED_OUT' || !user) {
-        setInputMode('text');
+      if (user) {
+        setCurrentUser(user);
+        try {
+          localStorage.setItem("qr_auth_user", JSON.stringify(user));
+        } catch (e) {
+          console.warn("Storage save notice:", e);
+        }
+      } else if (event === "SIGNED_OUT") {
+        try {
+          localStorage.removeItem("qr_auth_user");
+        } catch (e) {
+          console.warn("Storage remove notice:", e);
+        }
+        setCurrentUser(null);
+        setInputMode("text");
         setPdfUploading(false);
         setPdfError(null);
         setPdfUploadSuccess(false);
         setSavedDynamicQRs([]);
         setEditingTargetQRId(null);
         setDestinationUpdateSuccess(null);
-        setTempDestination('');
-        setQuickEditUrl('');
+        setTempDestination("");
+        setQuickEditUrl("");
         setConfig({ ...INITIAL_CONFIG });
       }
     });
@@ -534,7 +567,7 @@ const App: React.FC = () => {
       setDestinationUpdateSuccess(`PDF updated! QR now opens "${file.name}".`);
       setTimeout(() => setDestinationUpdateSuccess(null), 5000);
     } catch (err: any) {
-      console.error('Supabase PDF upload error:', err);
+      console.warn('Supabase PDF upload notice:', err);
       const message = err.message || 'Failed to upload PDF document.';
       if (message.includes('bucket') || message.includes('not found') || message.includes('row-level security')) {
         setPdfError(
@@ -557,9 +590,14 @@ const App: React.FC = () => {
 
   const handleSignOut = async () => {
     try {
+      localStorage.removeItem("qr_auth_user");
+    } catch (e) {
+      console.warn("Local storage remove notice:", e);
+    }
+    try {
       await supabase.auth.signOut();
     } catch (e) {
-      console.warn('Sign out notice:', e);
+      console.warn("Sign out notice:", e);
     }
     // Fully reset user and session states to guarantee complete isolation between Pro and Free mode
     setCurrentUser(null);
@@ -2281,7 +2319,10 @@ const App: React.FC = () => {
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
-        onSuccess={() => {
+        onSuccess={(user) => {
+          if (user) {
+            setCurrentUser(user);
+          }
           setIsAuthModalOpen(false);
         }}
         reason={authReason}

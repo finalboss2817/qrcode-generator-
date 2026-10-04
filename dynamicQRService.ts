@@ -70,13 +70,13 @@ export async function saveDynamicQRRecord(
       .upsert(supabasePayload, { onConflict: 'id' });
 
     if (error) {
-      console.error('Supabase DB save error:', error);
+      console.warn('Supabase DB save notice:', error);
       return { success: false, error: error.message };
     }
 
     return { success: true };
   } catch (err: any) {
-    console.error('Supabase unexpected error:', err);
+    console.warn('Supabase save notice:', err);
     return { success: false, error: err?.message || 'Database connection error' };
   }
 }
