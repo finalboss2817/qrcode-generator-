@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { Analytics } from '@vercel/analytics/react';
 import {
   QrCode,
   Share2,
@@ -2327,6 +2328,7 @@ const App: React.FC = () => {
         }}
         reason={authReason}
       />
+      <Analytics />
     </div>
   );
 };
