@@ -52,7 +52,11 @@ import {
 import { getBorderThemeById } from './borderThemes';
 import { ThemedQRPoster } from './components/ThemedQRPoster';
 import { BorderThemeSelector } from './components/BorderThemeSelector';
-import { drawThemeDecorationsOnCanvas } from './borderCanvasRenderer';
+import {
+  drawThemeDecorationsOnCanvas,
+  computePosterLayout,
+  POSTER_FONT_FAMILY,
+} from './borderCanvasRenderer';
 import { supabase, PDF_STORAGE_BUCKET } from './supabase';
 import { AuthModal } from './components/AuthModal';
 import { DynamicRedirectView } from './components/DynamicRedirectView';
@@ -74,7 +78,7 @@ const INITIAL_CONFIG: QRConfig = {
   bgColor: '#ffffff',
   size: 512,
   margin: 3,
-  exportScale: 2,
+  exportScale: 3,
   borderTheme: 'birthday',
   enable3DTilt: true,
   enableAnimations: true,
@@ -765,105 +769,144 @@ const App: React.FC = () => {
   };
 
   /**
-   * Generates crisp export canvas with frame, badge decal, and custom title
+   * Generates crisp, full-resolution export canvas with native vector QR rasterization,
+   * legible banner ribbon, wrapped caption, and zero edge clipping.
    */
-  const renderStudioCanvas = useCallback((): Promise<HTMLCanvasElement> => {
+  const renderStudioCanvas = useCallback(async (): Promise<HTMLCanvasElement> => {
+    if (!qrRef.current || !config.content) {
+      throw new Error('No content');
+    }
+
+    // Ensure custom web fonts (Plus Jakarta Sans, Noto Sans Gujarati) are ready before measuring text
+    try {
+      if (document.fonts && document.fonts.ready) {
+        await Promise.race([
+          document.fonts.ready,
+          new Promise((res) => setTimeout(res, 600)),
+        ]);
+      }
+    } catch {
+      // Ignore font wait failure
+    }
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('No canvas context');
+
+    const scale = config.exportScale || 3;
+    const dim = computePosterLayout(ctx, config, scale);
+
+    canvas.width = dim.width;
+    canvas.height = dim.height;
+
+    // Clone QR SVG and force native full-resolution vector rasterization (prevents blurry 200px upscaling)
+    const svgClone = qrRef.current.cloneNode(true) as SVGSVGElement;
+    if (!svgClone.getAttribute('xmlns')) {
+      svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    }
+    svgClone.removeAttribute('class');
+    svgClone.removeAttribute('style');
+    svgClone.setAttribute('width', String(dim.qrSize));
+    svgClone.setAttribute('height', String(dim.qrSize));
+    svgClone.setAttribute('shape-rendering', 'crispEdges');
+
+    const svgData = new XMLSerializer().serializeToString(svgClone);
+    const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
+
     return new Promise((resolve, reject) => {
-      if (!qrRef.current || !config.content) return reject(new Error('No content'));
-
-      const svg = qrRef.current;
-      const svgData = new XMLSerializer().serializeToString(svg);
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return reject(new Error('No canvas context'));
-
       const img = new Image();
-      const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-      const url = URL.createObjectURL(svgBlob);
-
       img.onload = () => {
-        const scale = config.exportScale || 2;
-        const qrSize = 500 * scale;
-        const cardPadding = 48 * scale;
-        const cardWidth = qrSize + cardPadding * 2;
-        const cardHeight = qrSize + cardPadding * 2;
+        try {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
 
-        const framePaddingX = 36 * scale;
-        const hasBanner = Boolean(config.frameBannerText || config.borderTheme !== 'classic');
-        const framePaddingTop = (hasBanner ? 56 : 36) * scale;
-        // Title Caption
-        const footerHeight = config.title.trim() ? 80 * scale : 44 * scale;
+          // Solid crisp white studio mat around the poster so sharing apps never clip or black-fill rounded corners
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, dim.width, dim.height);
 
-        canvas.width = cardWidth + framePaddingX * 2;
-        canvas.height = cardHeight + framePaddingTop + footerHeight;
+          ctx.save();
+          ctx.translate(dim.outerMargin, dim.outerMargin);
 
-        // Outer Poster Frame
-        ctx.fillStyle = config.color;
-        const frameRadius = 28 * scale;
-        ctx.beginPath();
-        ctx.roundRect(0, 0, canvas.width, canvas.height, frameRadius);
-        ctx.fill();
-
-        // Inner White Card
-        ctx.fillStyle = config.bgColor || '#ffffff';
-        const cardX = framePaddingX;
-        const cardY = framePaddingTop;
-        const cardRadius = 20 * scale;
-        ctx.beginPath();
-        ctx.roundRect(cardX, cardY, cardWidth, cardHeight, cardRadius);
-        ctx.fill();
-
-        // QR Code drawing
-        ctx.drawImage(img, cardX + cardPadding, cardY + cardPadding, qrSize, qrSize);
-
-        // Center Emblem Decal
-        const activeBadgeValue = getBadgeSymbol(config.centerIcon, config.centerText);
-        if (config.centerIcon !== 'none' && activeBadgeValue) {
-          const badgeSize = Math.min(qrSize * 0.24, 110 * scale);
-          const bx = cardX + cardPadding + (qrSize - badgeSize) / 2;
-          const by = cardY + cardPadding + (qrSize - badgeSize) / 2;
-
+          // Outer Poster Frame with soft elevation shadow
+          ctx.save();
+          ctx.shadowColor = 'rgba(15, 23, 42, 0.16)';
+          ctx.shadowBlur = 18 * scale;
+          ctx.shadowOffsetY = 6 * scale;
           ctx.fillStyle = config.color;
+          const frameRadius = 32 * scale;
           ctx.beginPath();
-          ctx.roundRect(bx, by, badgeSize, badgeSize, 14 * scale);
+          ctx.roundRect(0, 0, dim.posterWidth, dim.posterHeight, frameRadius);
+          ctx.fill();
+          ctx.restore();
+
+          // Inner White QR Card
+          ctx.fillStyle = config.bgColor || '#ffffff';
+          const cardRadius = 22 * scale;
+          ctx.beginPath();
+          ctx.roundRect(dim.cardX, dim.cardY, dim.cardWidth, dim.cardHeight, cardRadius);
           ctx.fill();
 
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 4 * scale;
-          ctx.stroke();
+          // Crisp Pixel-Sharp QR Code Drawing (disable smoothing for sharp module edges)
+          ctx.save();
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(
+            img,
+            dim.cardX + dim.cardPadding,
+            dim.cardY + dim.cardPadding,
+            dim.qrSize,
+            dim.qrSize
+          );
+          ctx.restore();
 
-          ctx.fillStyle = '#ffffff';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          const fontSize = Math.min(34 * scale, (badgeSize / Math.max(1, activeBadgeValue.length)) * 1.45);
-          ctx.font = `bold ${fontSize}px 'Plus Jakarta Sans', sans-serif`;
-          ctx.fillText(activeBadgeValue, bx + badgeSize / 2, by + badgeSize / 2);
+          // Center Emblem Decal
+          const activeBadgeValue = getBadgeSymbol(config.centerIcon, config.centerText);
+          if (config.centerIcon !== 'none' && activeBadgeValue) {
+            const badgeSize = Math.min(dim.qrSize * 0.22, 120 * scale);
+            const bx = dim.cardX + dim.cardPadding + (dim.qrSize - badgeSize) / 2;
+            const by = dim.cardY + dim.cardPadding + (dim.qrSize - badgeSize) / 2;
+
+            ctx.fillStyle = config.color;
+            ctx.beginPath();
+            ctx.roundRect(bx, by, badgeSize, badgeSize, 16 * scale);
+            ctx.fill();
+
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 4.5 * scale;
+            ctx.stroke();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            const badgeFontSize = Math.min(
+              38 * scale,
+              (badgeSize / Math.max(1, activeBadgeValue.length)) * 1.45
+            );
+            ctx.font = `bold ${badgeFontSize}px ${POSTER_FONT_FAMILY}`;
+            ctx.fillText(activeBadgeValue, bx + badgeSize / 2, by + badgeSize / 2);
+          }
+
+          // Draw Themed Border Decorations & Prominent Top Banner Ribbon
+          drawThemeDecorationsOnCanvas(ctx, config, dim);
+
+          // Multi-line Wrapped Poster Title Caption (never clipped or colliding with corner icons)
+          if (dim.titleLines.length > 0) {
+            ctx.fillStyle = '#ffffff';
+            ctx.font = `700 ${dim.titleFontSize}px ${POSTER_FONT_FAMILY}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            dim.titleLines.forEach((line, idx) => {
+              ctx.fillText(line, dim.posterWidth / 2, dim.titleStartY + idx * dim.titleLineHeight);
+            });
+          }
+
+          ctx.restore();
+          URL.revokeObjectURL(url);
+          resolve(canvas);
+        } catch (renderErr) {
+          URL.revokeObjectURL(url);
+          reject(renderErr);
         }
-
-        // Draw Themed Border Decorations (Balloons, Confetti, Laurels, HUD brackets, etc.)
-        drawThemeDecorationsOnCanvas(ctx, config, {
-          width: canvas.width,
-          height: canvas.height,
-          cardX,
-          cardY,
-          cardWidth,
-          cardHeight,
-          scale,
-        });
-
-        // Title Caption
-        if (config.title.trim()) {
-          ctx.fillStyle = '#ffffff';
-          const fontSize = 38 * scale;
-          ctx.font = `600 ${fontSize}px 'Plus Jakarta Sans', sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          const titleY = cardY + cardHeight + footerHeight / 2;
-          ctx.fillText(config.title, canvas.width / 2, titleY);
-        }
-
-        URL.revokeObjectURL(url);
-        resolve(canvas);
       };
 
       img.onerror = (err) => {
@@ -881,7 +924,11 @@ const App: React.FC = () => {
       const canvas = await renderStudioCanvas();
       const pngUrl = canvas.toDataURL('image/png');
       const downloadLink = document.createElement('a');
-      const safeName = (config.title || 'qrcode').toLowerCase().replace(/[^a-z0-9]/g, '-');
+      const safeName =
+        (config.title || 'qrcode')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'qrcode';
       downloadLink.download = `${safeName}-${config.exportScale}x.png`;
       downloadLink.href = pngUrl;
       document.body.appendChild(downloadLink);
@@ -898,18 +945,25 @@ const App: React.FC = () => {
     if (!qrRef.current || !config.content.trim()) return;
     const svgElement = qrRef.current;
     const clone = svgElement.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute('shape-rendering', 'crispEdges');
 
     // Embed matching responsive emblem decal into SVG export
     const activeBadgeValue = getBadgeSymbol(config.centerIcon, config.centerText);
     if (config.centerIcon !== 'none' && activeBadgeValue) {
       const viewBox = clone.viewBox?.baseVal;
-      const svgWidth = viewBox && viewBox.width > 0 ? viewBox.width : parseFloat(clone.getAttribute('width') || '220');
-      const svgHeight = viewBox && viewBox.height > 0 ? viewBox.height : parseFloat(clone.getAttribute('height') || '220');
+      const svgWidth =
+        viewBox && viewBox.width > 0
+          ? viewBox.width
+          : parseFloat(clone.getAttribute('width') || '256');
+      const svgHeight =
+        viewBox && viewBox.height > 0
+          ? viewBox.height
+          : parseFloat(clone.getAttribute('height') || '256');
 
-      const badgeSize = Math.min(svgWidth * 0.22, 48);
+      const badgeSize = svgWidth * 0.22;
       const bx = (svgWidth - badgeSize) / 2;
       const by = (svgHeight - badgeSize) / 2;
-      const rx = 10;
+      const rx = badgeSize * 0.18;
 
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
       rect.setAttribute('x', String(bx));
@@ -919,19 +973,22 @@ const App: React.FC = () => {
       rect.setAttribute('rx', String(rx));
       rect.setAttribute('fill', config.color);
       rect.setAttribute('stroke', '#ffffff');
-      rect.setAttribute('stroke-width', '2.5');
+      rect.setAttribute('stroke-width', String(badgeSize * 0.08));
       clone.appendChild(rect);
 
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       text.setAttribute('x', String(bx + badgeSize / 2));
-      text.setAttribute('y', String(by + badgeSize / 2 + 1));
+      text.setAttribute('y', String(by + badgeSize / 2));
       text.setAttribute('text-anchor', 'middle');
-      text.setAttribute('dominant-baseline', 'middle');
+      text.setAttribute('dominant-baseline', 'central');
       text.setAttribute('fill', '#ffffff');
-      const fontSize = Math.min(16, (badgeSize / Math.max(1, activeBadgeValue.length)) * 1.4);
+      const fontSize = Math.min(
+        badgeSize * 0.5,
+        (badgeSize / Math.max(1, activeBadgeValue.length)) * 1.35
+      );
       text.setAttribute('font-size', String(fontSize));
       text.setAttribute('font-weight', 'bold');
-      text.setAttribute('font-family', "'Plus Jakarta Sans', sans-serif");
+      text.setAttribute('font-family', POSTER_FONT_FAMILY);
       text.textContent = activeBadgeValue;
       clone.appendChild(text);
     }
@@ -940,7 +997,11 @@ const App: React.FC = () => {
     const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const downloadLink = document.createElement('a');
-    const safeName = (config.title || 'qrcode').toLowerCase().replace(/[^a-z0-9]/g, '-');
+    const safeName =
+      (config.title || 'qrcode')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'qrcode';
     downloadLink.download = `${safeName}.svg`;
     downloadLink.href = url;
     document.body.appendChild(downloadLink);
@@ -1001,27 +1062,29 @@ const App: React.FC = () => {
     setIsSharingNative(true);
     try {
       const canvas = await renderStudioCanvas();
-      canvas.toBlob(async (blob) => {
-        if (!blob) return;
-        const safeName = (config.title || 'qrcode').toLowerCase().replace(/[^a-z0-9]/g, '-');
-        const file = new File([blob], `${safeName}.png`, { type: 'image/png' });
+      const blob = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob((b) => resolve(b), 'image/png')
+      );
+      if (!blob) return;
 
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({
-            title: config.title || 'My QR Code',
-            text: `Scan this QR Code for: ${config.content} (Meena Technologies)`,
-            files: [file],
-          });
-        } else if (navigator.share) {
-          await navigator.share({
-            title: config.title || 'My QR Code',
-            text: `Scan this QR Code for: ${config.content}`,
-            url: config.content,
-          });
-        } else {
-          setIsShareModalOpen(true);
-        }
-      }, 'image/png');
+      const safeName = (config.title || 'qrcode').toLowerCase().replace(/[^a-z0-9]/g, '-') || 'qrcode';
+      const file = new File([blob], `${safeName}.png`, { type: 'image/png' });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          title: config.title || 'My QR Code',
+          text: `Scan this QR Code for: ${config.content} (Meena Technologies)`,
+          files: [file],
+        });
+      } else if (navigator.share) {
+        await navigator.share({
+          title: config.title || 'My QR Code',
+          text: `Scan this QR Code for: ${config.content}`,
+          url: config.content,
+        });
+      } else {
+        setIsShareModalOpen(true);
+      }
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         console.error('Share error:', err);
@@ -2025,9 +2088,10 @@ const App: React.FC = () => {
                     onChange={handleInputChange}
                     className="w-full px-3.5 py-2.5 text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-slate-900 outline-none transition text-slate-700 font-medium min-h-[44px]"
                   >
-                    <option value={1}>1x — Web Display (~700px)</option>
-                    <option value={2}>2x — High-DPI Retina (~1400px)</option>
-                    <option value={4}>4x — Ultra-HD Print (~2800px)</option>
+                    <option value={1}>1x — Web Display (~820px)</option>
+                    <option value={2}>2x — High-DPI Retina (~1640px)</option>
+                    <option value={3}>3x — Ultra-HD Share & Social (~2460px)</option>
+                    <option value={4}>4x — Master Print Quality (~3280px)</option>
                   </select>
                 </div>
 
@@ -2087,7 +2151,7 @@ const App: React.FC = () => {
               />
 
               {/* Action Buttons Below Card */}
-              <div className="w-full max-w-[340px] sm:max-w-sm mt-4 grid grid-cols-3 gap-2">
+              <div className="w-full max-w-[356px] sm:max-w-sm mt-4 grid grid-cols-3 gap-2">
                 <button
                   onClick={() => setIsShareModalOpen(true)}
                   disabled={!config.content.trim()}
@@ -2120,7 +2184,7 @@ const App: React.FC = () => {
               </div>
 
               {/* Mobile Back to Editor button */}
-              <div className="w-full max-w-[340px] sm:max-w-sm mt-3 lg:hidden">
+              <div className="w-full max-w-[356px] sm:max-w-sm mt-3 lg:hidden">
                 <button
                   onClick={() => setActiveMobileTab('editor')}
                   className="w-full py-2.5 px-3 rounded-xl border border-slate-200 bg-white text-slate-600 font-semibold text-xs flex items-center justify-center gap-1.5 active:scale-98 transition min-h-[44px]"

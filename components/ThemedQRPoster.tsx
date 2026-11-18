@@ -3,16 +3,10 @@ import { motion, useMotionValue, useSpring, useTransform } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { QRCodeSVG } from 'qrcode.react';
 import {
-  Sparkles,
   PartyPopper,
-  Shield,
   Rotate3d,
   QrCode,
-  Zap,
   Crown,
-  Heart,
-  Utensils,
-  Music,
   AlertTriangle,
 } from 'lucide-react';
 import { QRConfig } from '../types';
@@ -90,8 +84,6 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
   const glareX = useTransform(mouseX, [-0.5, 0.5], ['0%', '100%']);
   const glareY = useTransform(mouseY, [-0.5, 0.5], ['0%', '100%']);
 
-  const [isHovered, setIsHovered] = useState<boolean>(false);
-
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!config.enable3DTilt || !cardRef.current) return;
     const rect = cardRef.current.getBoundingClientRect();
@@ -102,13 +94,8 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
   };
 
   const handleMouseLeave = () => {
-    setIsHovered(false);
     mouseX.set(0);
     mouseY.set(0);
-  };
-
-  const handleMouseEnter = () => {
-    setIsHovered(true);
   };
 
   // Trigger celebratory confetti on click or theme activation
@@ -130,15 +117,15 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
     }
   }, [config.borderTheme]);
 
-  const bannerText = config.frameBannerText || theme.bannerText;
+  const bannerText = (config.frameBannerText?.trim() || theme.bannerText || '').trim();
+  const hasThemedFrame = config.borderTheme !== 'classic';
 
   return (
     <div className="w-full flex flex-col items-center select-none" style={{ perspective: 1200 }}>
-      {/* 3D Motion Card Container */}
+      {/* 3D Motion Card Container - Generous safe padding so nothing clips */}
       <motion.div
         ref={cardRef}
         onMouseMove={handleMouseMove}
-        onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         style={{
           rotateX: config.enable3DTilt ? rotateX : 0,
@@ -147,18 +134,22 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
         }}
         whileHover={config.enable3DTilt ? { scale: 1.02 } : undefined}
         transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-        className="w-full max-w-[340px] sm:max-w-sm rounded-2xl sm:rounded-3xl p-3.5 sm:p-6 shadow-xl sm:shadow-2xl relative transition-all duration-300 mx-auto overflow-hidden group border border-white/20"
+        className={`w-full max-w-[356px] sm:max-w-sm rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl relative transition-all duration-300 mx-auto overflow-hidden group border border-white/20 ${
+          hasThemedFrame
+            ? 'pt-10 pb-6 px-5 sm:pt-11 sm:pb-7 sm:px-6'
+            : 'p-4 sm:p-6'
+        }`}
       >
         {/* Dynamic Background Base */}
         <div
-          className="absolute inset-0 transition-colors duration-500 rounded-3xl"
+          className="absolute inset-0 transition-colors duration-500 rounded-2xl sm:rounded-3xl"
           style={{ backgroundColor: config.color }}
         />
 
         {/* 3D Dynamic Glare Reflection Overlay */}
         {config.enable3DTilt && (
           <motion.div
-            className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-35 transition-opacity duration-300 rounded-3xl z-30"
+            className="absolute inset-0 pointer-events-none opacity-0 group-hover:opacity-35 transition-opacity duration-300 rounded-2xl sm:rounded-3xl z-30"
             style={{
               background: `radial-gradient(circle at ${glareX} ${glareY}, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0) 65%)`,
             }}
@@ -169,50 +160,51 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
         {/* THEME 1: BIRTHDAY BASH 🎂🎈 */}
         {/* ========================================================================= */}
         {config.borderTheme === 'birthday' && (
-          <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
-            {/* Top Bunting Garland */}
-            <div className="absolute top-1.5 inset-x-4 flex justify-between items-center opacity-90">
-              <span className="text-sm">🎈</span>
-              <div className="flex gap-1">
+          <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden rounded-2xl sm:rounded-3xl">
+            {/* Top Bunting Garland safely in top strip */}
+            <div className="absolute top-2 inset-x-10 flex justify-center items-center opacity-90">
+              <div className="flex gap-1.5">
                 {['#f43f5e', '#eab308', '#06b6d4', '#8b5cf6', '#10b981'].map((c, i) => (
                   <motion.div
                     key={i}
                     animate={config.enableAnimations ? { y: [0, -2, 0] } : undefined}
                     transition={{ repeat: Infinity, duration: 1.5, delay: i * 0.15 }}
-                    className="w-3.5 h-3.5 clip-triangle shadow-2xs"
+                    className="w-3 h-3 shadow-2xs"
                     style={{ backgroundColor: c, clipPath: 'polygon(0 0, 100% 0, 50% 100%)' }}
                   />
                 ))}
               </div>
-              <span className="text-sm">🎁</span>
             </div>
 
-            {/* Corner Animated Balloons */}
+            {/* Corner Animated Balloons safely inside padding (never cut off) */}
             <motion.div
-              animate={config.enableAnimations ? { y: [-3, 3, -3], rotate: [-4, 4, -4] } : undefined}
+              animate={config.enableAnimations ? { y: [-2, 2, -2], rotate: [-4, 4, -4] } : undefined}
               transition={{ repeat: Infinity, duration: 3, ease: 'easeInOut' }}
-              className="absolute -top-1 -left-1 text-2xl drop-shadow-md"
+              className="absolute top-2 left-2.5 text-lg sm:text-xl drop-shadow-md leading-none"
             >
               🎈
             </motion.div>
             <motion.div
-              animate={config.enableAnimations ? { y: [3, -3, 3], rotate: [4, -4, 4] } : undefined}
+              animate={config.enableAnimations ? { y: [2, -2, 2], rotate: [4, -4, 4] } : undefined}
               transition={{ repeat: Infinity, duration: 2.8, ease: 'easeInOut', delay: 0.4 }}
-              className="absolute -top-1 -right-1 text-2xl drop-shadow-md"
+              className="absolute top-2 right-2.5 text-lg sm:text-xl drop-shadow-md leading-none"
             >
               🎉
             </motion.div>
 
-            {/* Floating Confetti Dots on Border */}
-            <div className="absolute inset-0 opacity-80 pointer-events-none">
-              <span className="absolute top-10 left-3 w-2 h-2 rounded-full bg-yellow-300 animate-ping opacity-75" />
-              <span className="absolute top-14 right-3 w-2 h-2 rounded-full bg-pink-300" />
-              <span className="absolute bottom-16 left-3 w-2.5 h-1 rounded-sm bg-cyan-300 rotate-45" />
-              <span className="absolute bottom-12 right-3 w-2 h-2 rounded-full bg-emerald-300" />
+            {/* Floating Confetti Dots on outer side margins */}
+            <div className="absolute inset-0 opacity-85 pointer-events-none">
+              <span className="absolute top-16 left-2 w-2 h-2 rounded-full bg-yellow-300 animate-ping opacity-75" />
+              <span className="absolute top-20 right-2 w-2 h-2 rounded-full bg-pink-300" />
+              <span className="absolute bottom-16 left-2 w-2.5 h-1 rounded-sm bg-cyan-300 rotate-45" />
+              <span className="absolute bottom-16 right-2 w-2 h-2 rounded-full bg-emerald-300" />
             </div>
 
-            {/* Bottom Celebration Badge */}
-            <div className="absolute bottom-1 right-2 text-xl drop-shadow-md">
+            {/* Bottom Celebration Badges neatly tucked in corners */}
+            <div className="absolute bottom-2 left-3 text-base sm:text-lg drop-shadow-md leading-none">
+              🎈
+            </div>
+            <div className="absolute bottom-2 right-3 text-base sm:text-lg drop-shadow-md leading-none">
               🎂
             </div>
           </div>
@@ -224,17 +216,17 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
         {config.borderTheme === 'wedding' && (
           <div className="absolute inset-0 pointer-events-none z-20">
             {/* Elegant Double Hairline Golden Frame */}
-            <div className="absolute inset-2.5 border border-amber-300/60 rounded-2xl" />
-            <div className="absolute inset-3.5 border border-amber-200/40 rounded-xl" />
+            <div className="absolute inset-2 border border-amber-300/60 rounded-2xl" />
+            <div className="absolute inset-3 border border-amber-200/40 rounded-xl" />
 
             {/* Corner Botanical Floral Flourishes */}
-            <div className="absolute top-2 left-2 text-amber-200/90 text-sm">❦</div>
-            <div className="absolute top-2 right-2 text-amber-200/90 text-sm">❧</div>
-            <div className="absolute bottom-2 left-2 text-amber-200/90 text-sm">❧</div>
-            <div className="absolute bottom-2 right-2 text-amber-200/90 text-sm">❦</div>
+            <div className="absolute top-2 left-3 text-amber-200/90 text-sm">❦</div>
+            <div className="absolute top-2 right-3 text-amber-200/90 text-sm">❧</div>
+            <div className="absolute bottom-2 left-3 text-amber-200/90 text-sm">❧</div>
+            <div className="absolute bottom-2 right-3 text-amber-200/90 text-sm">❦</div>
 
             {/* Top Romantic Accent */}
-            <div className="absolute top-1.5 inset-x-0 flex items-center justify-center gap-1.5 text-amber-100 text-xs font-serif tracking-widest uppercase">
+            <div className="absolute top-2 inset-x-0 flex items-center justify-center gap-1.5 text-amber-100 text-xs font-serif tracking-widest uppercase">
               <span>✦</span>
               <span>💍</span>
               <span>✦</span>
@@ -263,7 +255,7 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
             )}
 
             {/* Tech Specs Label */}
-            <div className="absolute top-2 inset-x-8 flex justify-between text-[9px] font-mono font-bold tracking-widest text-cyan-300/80 uppercase">
+            <div className="absolute top-2.5 inset-x-7 flex justify-between text-[9px] font-mono font-bold tracking-widest text-cyan-300/85 uppercase">
               <span>HUD_V2.4</span>
               <span>SECURE_LINK</span>
             </div>
@@ -280,13 +272,13 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
             <div className="absolute inset-3 border border-amber-200/50 rounded-xl" />
 
             {/* Crown & Star Corner Badges */}
-            <div className="absolute top-1.5 left-2.5 text-amber-300 text-xs">★</div>
-            <div className="absolute top-1.5 right-2.5 text-amber-300 text-xs">★</div>
-            <div className="absolute bottom-2 left-2.5 text-amber-300 text-xs">★</div>
-            <div className="absolute bottom-2 right-2.5 text-amber-300 text-xs">★</div>
+            <div className="absolute top-2 left-3 text-amber-300 text-xs">★</div>
+            <div className="absolute top-2 right-3 text-amber-300 text-xs">★</div>
+            <div className="absolute bottom-2 left-3 text-amber-300 text-xs">★</div>
+            <div className="absolute bottom-2 right-3 text-amber-300 text-xs">★</div>
 
             {/* Top Crown Emblem */}
-            <div className="absolute top-1 inset-x-0 flex items-center justify-center gap-1 text-amber-300 text-sm">
+            <div className="absolute top-2 inset-x-0 flex items-center justify-center gap-1 text-amber-300 text-sm">
               <Crown className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
             </div>
           </div>
@@ -298,7 +290,7 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
         {config.borderTheme === 'food_bistro' && (
           <div className="absolute inset-0 pointer-events-none z-20">
             {/* Stitched Artisan Dashed Border */}
-            <div className="absolute inset-2.5 border-2 border-dashed border-amber-200/60 rounded-2xl" />
+            <div className="absolute inset-2 border-2 border-dashed border-amber-200/60 rounded-2xl" />
 
             {/* Culinary Corner Icons */}
             <div className="absolute top-2 left-3 text-amber-100 text-xs">🍴</div>
@@ -312,7 +304,7 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
         {/* THEME 6: PARTY & FESTIVAL 🎪♫ */}
         {/* ========================================================================= */}
         {config.borderTheme === 'party_fun' && (
-          <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
+          <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden rounded-2xl sm:rounded-3xl">
             {/* Multi-colored Funky Rim */}
             <div className="absolute inset-2 border-2 border-fuchsia-300/70 rounded-2xl" />
 
@@ -320,27 +312,27 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
             <motion.div
               animate={config.enableAnimations ? { rotate: [0, 15, -15, 0] } : undefined}
               transition={{ repeat: Infinity, duration: 2 }}
-              className="absolute top-1 left-2 text-sm"
+              className="absolute top-2 left-3 text-sm leading-none"
             >
               🎵
             </motion.div>
             <motion.div
               animate={config.enableAnimations ? { rotate: [0, -15, 15, 0] } : undefined}
               transition={{ repeat: Infinity, duration: 2.2 }}
-              className="absolute top-1 right-2 text-sm"
+              className="absolute top-2 right-3 text-sm leading-none"
             >
               ⭐
             </motion.div>
-            <div className="absolute bottom-1 left-2 text-sm">🎸</div>
-            <div className="absolute bottom-1 right-2 text-sm">✨</div>
+            <div className="absolute bottom-2 left-3 text-sm leading-none">🎸</div>
+            <div className="absolute bottom-2 right-3 text-sm leading-none">✨</div>
           </div>
         )}
 
-        {/* Top Decorative Banner Ribbon (if specified or themed) */}
+        {/* Top Decorative Banner Ribbon - Bold, spacious & clearly visible */}
         {bannerText && (
           <div
-            className="w-full text-center py-1 px-3 mb-2 rounded-lg bg-black/25 text-white text-[10px] font-bold tracking-wider uppercase border border-white/15 relative z-20"
-            style={{ transform: 'translateZ(15px)' }}
+            className="w-full text-center py-2 px-3.5 mb-3 rounded-xl bg-black/30 text-white text-xs sm:text-sm font-bold tracking-wide border border-white/25 shadow-xs break-words leading-snug relative z-20"
+            style={{ transform: config.enable3DTilt ? 'translateZ(15px)' : 'none' }}
           >
             {bannerText}
           </div>
@@ -349,8 +341,8 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
         {/* Dynamic QR Badge on Poster */}
         {config.isDynamic && !bannerText && (
           <div
-            className="w-full text-center py-0.5 px-2.5 mb-2 rounded-md bg-indigo-950/40 text-indigo-100 text-[9px] font-bold tracking-wider uppercase border border-indigo-300/20 relative z-20 flex items-center justify-center gap-1"
-            style={{ transform: 'translateZ(15px)' }}
+            className="w-full text-center py-1.5 px-3 mb-3 rounded-xl bg-indigo-950/45 text-indigo-100 text-[11px] font-bold tracking-wider uppercase border border-indigo-300/25 relative z-20 flex items-center justify-center gap-1.5"
+            style={{ transform: config.enable3DTilt ? 'translateZ(15px)' : 'none' }}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             <span>Dynamic QR • Cloud Managed</span>
@@ -364,7 +356,7 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
 
           return (
             <div
-              className="w-full bg-white rounded-xl sm:rounded-2xl p-3 sm:p-5 flex flex-col items-center justify-center relative shadow-md transition-all duration-300 z-10"
+              className="w-full bg-white rounded-xl sm:rounded-2xl p-3.5 sm:p-5 flex flex-col items-center justify-center relative shadow-md transition-all duration-300 z-10"
               style={{
                 backgroundColor: config.bgColor,
                 transform: config.enable3DTilt ? 'translateZ(20px)' : 'none',
@@ -386,12 +378,12 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
                         key={qrValueToEncode}
                         ref={qrRef}
                         value={qrValueToEncode}
-                        size={200}
+                        size={256}
                         fgColor={config.color}
                         bgColor={config.bgColor}
                         level="H"
                         marginSize={config.margin}
-                        className="rounded-lg w-full max-w-[200px] sm:max-w-[220px] h-auto aspect-square"
+                        className="rounded-lg w-full max-w-[210px] sm:max-w-[230px] h-auto aspect-square"
                       />
                     </QRErrorBoundary>
 
@@ -420,13 +412,15 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
           );
         })()}
 
-        {/* Poster Title Caption */}
+        {/* Poster Title Caption - Wraps cleanly instead of truncating, safe clearance from corner icons */}
         {config.title.trim() && (
           <div
-            className="mt-3.5 px-2 w-full text-center relative z-20"
+            className={`mt-3.5 w-full text-center relative z-20 ${
+              hasThemedFrame ? 'px-6 sm:px-7' : 'px-2'
+            }`}
             style={{ transform: config.enable3DTilt ? 'translateZ(18px)' : 'none' }}
           >
-            <h3 className="text-white font-bold text-sm sm:text-base leading-snug tracking-wide truncate drop-shadow-xs">
+            <h3 className="text-white font-bold text-sm sm:text-base leading-snug tracking-wide break-words drop-shadow-xs">
               {config.title}
             </h3>
           </div>
@@ -434,7 +428,7 @@ export const ThemedQRPoster: React.FC<ThemedQRPosterProps> = ({
       </motion.div>
 
       {/* Interactive Controls Pill below 3D card */}
-      <div className="w-full max-w-[340px] sm:max-w-sm flex items-center justify-between mt-3 px-1">
+      <div className="w-full max-w-[356px] sm:max-w-sm flex items-center justify-between mt-3 px-1">
         <button
           type="button"
           onClick={onToggle3D}
